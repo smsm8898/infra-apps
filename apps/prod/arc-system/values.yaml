@@ -1,0 +1,22 @@
+environment: prod
+
+# DO NOT EDIT THIS SECTION
+argocd:
+  project: default
+  namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+applications:
+  namespace: arc-system
+  actionsRunnerController:
+    enabled: true
+    version: 0.23.5
+  actionsRunner:
+    enabled: true
+    version: 0.1.0

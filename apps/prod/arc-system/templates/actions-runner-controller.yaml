@@ -1,0 +1,32 @@
+{{- if .Values.applications.actionsRunnerController.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: actions-runner-controller
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: {{ $.Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ $.Values.argocd.project }}
+  source:
+    path: helm-charts/actions-runner-system/actions-runner-controller/{{ $.Values.applications.actionsRunnerController.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      valueFiles:
+      - values.yaml
+      - values-{{ $.Values.environment }}.yaml
+  syncPolicy:
+    automated:
+      {{- toYaml $.Values.argocd.syncPolicy.automated | nindent 12 }}
+    syncOptions:
+      {{- toYaml $.Values.argocd.syncPolicy.syncOptions | nindent 12 }}
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - "/spec/preserveUnknownFields"
+{{- end }}
