@@ -1,0 +1,21 @@
+# https://github.com/actions/actions-runner-controller/blob/master/docs/deploying-arc-runners.md
+{{- range .Values.runners }}
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: RunnerDeployment
+metadata:
+  name: actions-runner-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  template:
+    spec:
+      repository: {{ .repository }}
+      serviceAccountName: {{ $.Values.serviceAccountName }}
+      labels:
+        - runner-{{ $.Values.environment }}
+      {{- if .resources }}
+      resources: {{ toYaml .resources }}
+      {{- else }}
+      resources: {}
+      {{- end }}
+---
+{{- end }}

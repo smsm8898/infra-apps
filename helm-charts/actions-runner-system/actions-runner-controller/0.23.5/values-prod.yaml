@@ -1,0 +1,54 @@
+environment: prod
+
+actions-runner-controller:
+  replicaCount: 2
+
+  authSecret:
+    name: actions-runner-controller-secret
+
+  image:
+    actionsRunnerRepositoryAndTag: # prod위치.dkr.ecr.ap-northeast-2.amazonaws.com/prod ECR
+
+  serviceAccount:
+    create: false
+    name: actions-runner-controller-service-account
+
+  resources:  
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  nodeSelector:
+    eks.amazonaws.com/nodegroup: # prod management nodegroup
+
+  tolerations:
+    - key: eks.amazonaws.com/nodegroup
+      operator: Equal
+      value: # prod management nodegroup
+      effect: NoSchedule
+
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: eks.amazonaws.com/nodegroup
+                operator: In
+                values:
+                  - # prod management nodegroup
+
+  additionalVolumes:
+    - name: actions-runner-controller-secrets-store
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: "actions-runner-controller-secrets-store"
+
+  additionalVolumeMounts:
+    - name: actions-runner-controller-secrets-store
+      mountPath: /mnt/secrets-store
+      readOnly: true

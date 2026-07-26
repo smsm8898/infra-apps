@@ -1,0 +1,10 @@
+environment: dev
+
+serviceAccountName: actions-runner-service-account
+
+runners:
+  - name: infra-apps
+    repository: smsm8898/infra-apps
+  - name: reco-api
+    repository: smsm8898/reco
+  

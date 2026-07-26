@@ -1,0 +1,21 @@
+{{- range .Values.runners }}
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: HorizontalRunnerAutoscaler
+metadata:
+  name: actions-runner-autoscaler-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  # Runners in the targeted RunnerDeployment won't be scaled down
+  # for 5 minutes instead of the default 10 minutes now
+  scaleDownDelaySecondsAfterScaleOut: 300
+  scaleTargetRef:
+    kind: RunnerDeployment
+    name: actions-runner-{{ .name }}
+  minReplicas: 0
+  maxReplicas: 10
+  metrics:
+    - type: TotalNumberOfQueuedAndInProgressWorkflowRuns
+      repositoryNames:
+        - {{.repository }}
+---
+{{- end }}
