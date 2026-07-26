@@ -1,0 +1,29 @@
+{{- if .Values.applications.recoApi.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reco-api
+  namespace: {{ .Values.argocd.namespace }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  destination:
+    namespace: {{ .Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ .Values.argocd.project }}
+  source:
+    path: helm-charts/reco-api/{{ .Values.applications.recoApi.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-{{ .Values.environment }}.yaml
+  syncPolicy:
+    automated:
+      {{- toYaml .Values.argocd.syncPolicy.automated | nindent 8 }}
+    syncOptions:
+      {{- toYaml .Values.argocd.syncPolicy.syncOptions | nindent 8 }}
+{{- end }}

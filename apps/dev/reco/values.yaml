@@ -1,0 +1,17 @@
+environment: dev
+
+argocd:
+  project: default
+  namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+applications:
+  namespace: reco
+  recoApi:
+    enabled: true
+    version: "0.1.0"
