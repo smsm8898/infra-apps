@@ -14,6 +14,9 @@ infra-apps/
 │   └── prod/                       # 운영 환경
 │       └── reco/                   # 추천 시스템
 ├── helm-charts/                    # Helm 차트 라이브러리
+│   ├── actions-runner-system/      # Self-hosted GitHub Actions Runner
+│   │   ├── actions-runner-controller/  # ARC 컨트롤러 (upstream 차트 wrapping)
+│   │   └── actions-runner/         # RunnerDeployment + HorizontalRunnerAutoscaler
 │   └── reco-api/                   # 추천 시스템
 └── docker/                         # Docker 이미지 빌드 (각 하위 디렉토리 = 1 이미지 빌드 컨텍스트)
     └── actions-runner/             # Self-hosted GitHub Actions Runner
