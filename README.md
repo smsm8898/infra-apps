@@ -10,8 +10,10 @@
 infra-apps/
 ├── apps/                           # ArgoCD App-of-Apps 배포 설정
 │   ├── dev/                        # 개발 환경
+│   │   ├── arc-system/             # GitHub Actions Runner Controller
 │   │   └── reco/                   # 추천 시스템
 │   └── prod/                       # 운영 환경
+│       ├── arc-system/             # GitHub Actions Runner Controller
 │       └── reco/                   # 추천 시스템
 ├── helm-charts/                    # Helm 차트 라이브러리
 │   ├── actions-runner-system/      # Self-hosted GitHub Actions Runner
