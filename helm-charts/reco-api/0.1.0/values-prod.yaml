@@ -1,0 +1,190 @@
+environment: prod
+
+serviceAccount:
+  name: reco-sa
+  create: false
+
+container:
+  repository: prod위치.dkr.ecr.ap-northeast-2.amazonaws.com/prod-reco ECR위치
+  pullPolicy: IfNotPresent   # prod는 신중히 수동 입력
+
+secretsStore:
+  create: true
+  providerClassName: reco-api-secrets
+  secretName: # "service_name" + "-sercrets"
+  awsSecretObjectName: # env/service_name/secrets
+
+# 전 service 공통 deployment 기본값.
+apiDefaults:
+  enabled: false
+  command:
+    - "uvicorn"
+    - "api.main:app"
+    - "--host"
+    - "0.0.0.0"
+    - "--port"
+    - "8000"
+    - "--workers"
+    - "2"
+    # Idle 연결 race: 클라(httpx 5s)보다 크게
+    - "--timeout-keep-alive" 
+    - "30"
+  flags:
+    # 개별 service 가 자기 것만 켬
+    ENABLE_PRODUCT_RELATED: "false"
+    ENABLE_PRODUCT_PERSONALIZE: "false"
+    ENABLE_PRODUCT_POPULAR: "false"
+  podMonitor:
+    # /metrics: 메트릭(RED) scrape 설정
+    enabled: true
+  metrics:
+    # # PROMETHEUS_MULTIPROC_DIR: reco instrumentator expose() 감지
+    multiprocDir: /tmp/prometheus-multiproc 
+    scrapePort: deploy-port
+    scrapePath: /metrics
+    scrapeInterval: 30s
+  livenessProbe:
+    # prod에서는 failureThreshold(3→6): ~60s 연속 실패해야 재시작(바쁜 pod 오판 방지)
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    path: /ready
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+  service:
+    port: 80
+  # 공용 Ingress(ALB) 설정 + service 기본 노출 정책을 한곳에.
+  ingress:
+    enabled: false
+    name: reco-api
+    host: reco-api.example.com
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internal
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: '443'
+      alb.ingress.kubernetes.io/ssl-certificate:    # certificate 위치
+      alb.ingress.kubernetes.io/healthcheck-path: /health
+      alb.ingress.kubernetes.io/group.name:     # name
+      alb.ingress.kubernetes.io/group.order:     # order
+      alb.ingress.kubernetes.io/load-balancer-attributes:     # log 
+  nodeSelector:
+    eks.amazonaws.com/nodegroup:   # eks - reco - nodegroup
+  tolerations:
+    - key: eks.amazonaws.com/nodegroup
+      operator: Equal
+      value: # eks - reco - nodegroup
+      effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: eks.amazonaws.com/nodegroup
+                operator: In
+                values:
+                  - # eks - reco - nodegroup
+                  
+# reco nodegroup spec(ex. m6i.xlarge)
+# vCPU: 4
+# 메모리: 16 GiB
+# 네트워크 대역폭: 최대 12.5 Gbps
+# EBS 대역폭: 최대 10 Gbps
+
+apis:
+  # 개인화 상품 추천
+  product-personalize-api:
+    enabled: true 
+    name: product-personalize-api
+    tag: "" # prod는 수동 입력
+    podMonitor:
+      enabled: true
+    replicas: 2
+    flags:
+      ENABLE_PRODUCT_PERSONALIZE: "true"
+    hpa:
+      # peak time: horizontal auto scale out
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 4
+      targetCPUUtilization: 70
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "256Mi"
+      limits:
+        cpu: "2"
+        memory: "512Mi"
+    pdb:
+      # minimum values
+      enabled: true
+      minAvailable: 1
+    ingress: 
+      enabled: true
+      paths:
+        - /api/v1/products/personalize
+
+  # 연관 상품 추천
+  product-related-api:
+    enabled: true 
+    name: product-related-api
+    tag: "" 
+    podMonitor:
+      enabled: true
+    replicas: 2
+    flags:
+      ENABLE_PRODUCT_RELATED: "true"
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 4
+      targetCPUUtilization: 70
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "256Mi"
+      limits:
+        cpu: "2"
+        memory: "512Mi"
+    pdb:
+      enabled: true
+      minAvailable: 1
+    ingress: 
+      enabled: true
+      paths:
+        - /api/v1/products/related
+
+  # 인기 상품 추천
+  product-popular-api:
+    enabled: true 
+    name: product-popular-api
+    tag: "" 
+    podMonitor:
+      enabled: true
+    replicas: 2
+    flags:
+      ENABLE_PRODUCT_POPULAR: "true"
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 3
+      targetCPUUtilization: 70
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "1"
+        memory: "256Mi"
+    pdb:
+      enabled: true
+      minAvailable: 1
+    ingress: 
+      enabled: true
+      paths:
+        - /api/v1/products/popular

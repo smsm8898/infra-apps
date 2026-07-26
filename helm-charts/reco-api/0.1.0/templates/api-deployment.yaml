@@ -1,0 +1,105 @@
+{{- range $name, $cfg := .Values.apis }}
+{{- if dig "enabled" $.Values.apiDefaults.enabled $cfg }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    example.com/environment: {{ $.Values.environment }}
+    example.com/app-name: {{ $cfg.name }}
+spec:
+  {{- if not $cfg.hpa.enabled }}
+  replicas: {{ $cfg.replicas }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      example.com/app-name: {{ $cfg.name }}
+  template:
+    metadata:
+      labels:
+        example.com/environment: {{ $.Values.environment }}
+        example.com/app-name: {{ $cfg.name }}
+        app.kubernetes.io/name: reco-api
+    spec:
+      serviceAccountName: {{ $.Values.serviceAccount.name }}
+      {{- /* preStopSleep + 종료시간보다 커야 sleep 중 SIGKILL 방지 */}}
+      terminationGracePeriodSeconds: {{ $.Values.apiDefaults.terminationGracePeriodSeconds | default 60 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $.Values.container.repository }}:{{ required (printf "apis.%s.tag is required" $name) $cfg.tag }}
+          imagePullPolicy: {{ $.Values.container.pullPolicy }}
+          command:
+            {{- toYaml $.Values.apiDefaults.command | nindent 12 }}
+          ports:
+            - name: deploy-port
+              containerPort: {{ $.Values.apiDefaults.port }}
+          envFrom:
+            - secretRef:
+                name: {{ $.Values.secretsStore.secretName }}
+          {{- /* service flag override */}}
+          {{- $flags := mergeOverwrite (deepCopy (default dict $.Values.apiDefaults.flags)) (default dict $cfg.flags) }}
+          env:
+            {{- range $k, $v := $flags }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- /* 구조적 로깅 식별 필드: json_logs */}}
+            - name: SERVICE_VERSION
+              value: {{ required (printf "apis.%s.tag is required" $name) $cfg.tag | quote }}
+            - name: ENV
+              value: {{ $.Values.environment | quote }}
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: {{ $.Values.apiDefaults.metrics.multiprocDir | quote }}
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ $.Values.apiDefaults.livenessProbe.path }}
+              port: deploy-port
+            initialDelaySeconds: {{ $.Values.apiDefaults.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.apiDefaults.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ $.Values.apiDefaults.livenessProbe.timeoutSeconds }}
+            {{- /* 바쁜 pod 를 죽은 pod 로 오판 방지(연속 실패해야 재시작) */}}
+            failureThreshold: {{ $.Values.apiDefaults.livenessProbe.failureThreshold | default 3 }}
+          readinessProbe:
+            httpGet:
+              path: {{ $.Values.apiDefaults.readinessProbe.path }}
+              port: deploy-port
+            initialDelaySeconds: {{ $.Values.apiDefaults.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.apiDefaults.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ $.Values.apiDefaults.readinessProbe.timeoutSeconds }}
+          {{- /* graceful drain: ALB 디레지스터 완료까지 응답 지속(504 방지) */}}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep {{ $.Values.apiDefaults.preStopSleepSeconds | default 30 }}"]
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+            - name: prometheus-multiproc
+              mountPath: {{ $.Values.apiDefaults.metrics.multiprocDir }}
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ $.Values.secretsStore.providerClassName }}
+        - name: prometheus-multiproc
+          emptyDir: {}
+      nodeSelector:
+        {{- toYaml $.Values.apiDefaults.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml $.Values.apiDefaults.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml $.Values.apiDefaults.affinity | nindent 8 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,18 @@
+{{- range $name, $cfg := .Values.apis }}
+{{- if and (dig "enabled" $.Values.apiDefaults.enabled $cfg) $cfg.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $cfg.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    example.com/environment: {{ $.Values.environment }}
+    example.com/app-name: {{ $cfg.name }}
+spec:
+  minAvailable: {{ $cfg.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      example.com/app-name: {{ $cfg.name }}
+{{- end }}
+{{- end }}

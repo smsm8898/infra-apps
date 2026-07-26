@@ -1,0 +1,45 @@
+# Skeleton: no-sepcific values here
+environment: ""   # dev / prod
+
+serviceAccount:   # 수동 생성 + pod identity 권한부여(terraform)
+  name: ""
+  create: false
+
+container:
+  repository: ""   # ECR
+  pullPolicy: ""   # reco -> imag-tag
+
+secretsStore:
+  create: false
+  providerClassName: ""
+  secretName: ""
+  awsSecretObjectName: ""
+
+apiDefaults:
+  enabled: false
+  command: []
+  port: -1
+  terminationGracePeriodSeconds: -1
+  preStopSleepSeconds: -1
+  flags: {}
+  podMonitor:
+    enabled: false
+  metrics:
+    multiprocDir: ""
+    scrapePort: ""
+    scrapePath: ""
+    scrapeInterval: ""
+  livenessProbe: {}
+  readinessProbe: {}
+  service:
+    port: -1
+  ingress:
+    enabled: false
+    name: ""
+    host: ""
+    annotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+apis: {}

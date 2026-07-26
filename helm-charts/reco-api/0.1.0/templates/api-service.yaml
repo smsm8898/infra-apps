@@ -1,0 +1,22 @@
+{{- range $name, $cfg := .Values.apis }}
+{{- if dig "enabled" $.Values.apiDefaults.enabled $cfg }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    example.com/environment: {{ $.Values.environment }}
+    example.com/app-name: {{ $cfg.name }}
+spec:
+  type: ClusterIP
+  selector:
+    example.com/app-name: {{ $cfg.name }}
+  ports:
+    - name: service-port
+      protocol: TCP
+      port: {{ $.Values.apiDefaults.service.port }}
+      targetPort: deploy-port
+{{- end }}
+{{- end }}

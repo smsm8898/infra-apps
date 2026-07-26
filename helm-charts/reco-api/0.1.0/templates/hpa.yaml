@@ -1,0 +1,26 @@
+{{- range $name, $cfg := .Values.apis }}
+{{- if and (dig "enabled" $.Values.apiDefaults.enabled $cfg) $cfg.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $cfg.name }}-hpa
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    example.com/environment: {{ $.Values.environment }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $cfg.name }}
+  minReplicas: {{ $cfg.hpa.minReplicas }}
+  maxReplicas: {{ $cfg.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $cfg.hpa.targetCPUUtilization }}
+{{- end }}
+{{- end }}

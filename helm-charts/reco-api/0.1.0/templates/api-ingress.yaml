@@ -1,0 +1,43 @@
+{{- /*
+  공용 Ingress(=단일 ALB). 설정은 apiDefaults.ingress 한곳에 모음:
+    - enabled : service 기본 부착 여부 (apis.<name>.ingress.enabled 로 override)
+    - name/host/annotations : ALB 객체 설정 (전 service 공유)
+*/}}
+{{- $ing := .Values.apiDefaults.ingress }}
+{{- $attached := list }}
+{{- range $name, $cfg := .Values.apis }}
+{{- /* 실행(enabled)되고 ingress.enabled 도 true 인 Service 만 ALB 부착 (disabled Service 는 Service 자체가 없음) */}}
+{{- if and (dig "enabled" $.Values.apiDefaults.enabled $cfg) (dig "ingress" "enabled" $ing.enabled $cfg) }}
+{{- $attached = append $attached $cfg }}
+{{- end }}
+{{- end }}
+{{- if $attached }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $ing.name | default "reco-api" }}-ingress
+  namespace: {{ .Release.Namespace }}
+  {{- with $ing.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    example.com/environment: {{ .Values.environment }}
+    example.com/app-name: {{ $ing.name | default "reco-api" }}
+spec:
+  rules:
+    - host: {{ $ing.host }}
+      http:
+        paths:
+          {{- range $cfg := $attached }}
+          {{- range dig "ingress" "paths" (list) $cfg }}
+          - path: {{ . }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $cfg.name }}
+                port:
+                  name: service-port
+          {{- end }}
+          {{- end }}
+{{- end }}

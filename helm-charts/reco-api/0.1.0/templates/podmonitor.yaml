@@ -1,0 +1,23 @@
+{{- /* service(enabled)별 PodMonitor. 기존 deploy-port(8000)의 /metrics 를 scrape. */}}
+{{- range $name, $cfg := .Values.apis }}
+{{- if and (dig "enabled" $.Values.apiDefaults.enabled $cfg) (dig "podMonitor" "enabled" $.Values.apiDefaults.podMonitor.enabled $cfg) }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $cfg.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    release: kube-prometheus-stack
+    example.com/environment: {{ $.Values.environment }}
+    example.com/app-name: {{ $cfg.name }}
+spec:
+  selector:
+    matchLabels:
+      example.com/app-name: {{ $cfg.name }}
+  podMetricsEndpoints:
+    - port: {{ $.Values.apiDefaults.metrics.scrapePort }}
+      path: {{ $.Values.apiDefaults.metrics.scrapePath }}
+      interval: {{ $.Values.apiDefaults.metrics.scrapeInterval }}
+{{- end }}
+{{- end }}
