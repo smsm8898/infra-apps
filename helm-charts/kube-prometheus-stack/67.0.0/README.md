@@ -172,6 +172,37 @@ awk '/^kind: Ingress/,/^---/' /tmp/r.yaml                 # ALB Ingress + host
 > grafana subchart 리소스 이름은 `kube-prometheus-stack-grafana` — 부모의 fullnameOverride
 > 는 subchart 에 전파되지 않음 (subchart 는 자기 fullname 을 따로 계산).
 
+### 5단계: reco-api PodMonitor 연결 검증 (코드 변경 없음)
+
+앱 메트릭이 대시보드에 도달하는 전체 경로를 렌더 수준에서 검증:
+
+```
+reco-api 차트의 PodMonitor (ns: reco, 서비스별 3개, port: deploy-port, path: /metrics)
+  → operator 가 발견 (--namespaces=<릴리스 ns>,reco ← prometheusOperator.namespaces.additional)
+  → Prometheus CR 이 선택 (podMonitorSelector: {} + NilUsesHelmValues=false = 전체 선택)
+  → 수집된 메트릭에 namespace="reco" 라벨
+  → 대시보드 쿼리가 namespace="reco" 로만 필터 (job 하드코딩 없음, 31개 쿼리)
+```
+
+```bash
+# PodMonitor 렌더 확인 (reco-api 차트)
+helm template reco-api helm-charts/reco-api/0.1.0 -n reco \
+  -f .../values.yaml -f .../values-dev.yaml | awk '/^kind: PodMonitor/,/^---/'
+
+# operator 의 watch namespace 인자 확인 (monitoring 차트 렌더)
+grep -- "--namespaces=" /tmp/render.yaml        # → --namespaces=<릴리스 ns>,reco
+
+# 대시보드 쿼리의 라벨 매처 분포 확인
+grep -oE '(job|namespace|service)=\\?"[^"\\]*' dashboards/reco-api-monitoring.json \
+  | sort | uniq -c                              # → namespace="reco" 31개, job 없음
+```
+
+> 배운 것: ① 대시보드가 job 대신 namespace 로만 필터하므로 API 서비스가 늘어나도
+> (PodMonitor 이름이 뭐든) 자동 커버된다. ② PodMonitor 의 `release: kube-prometheus-stack`
+> 라벨은 현재 설정(전체 선택)에선 불필요하지만, 기본 selector 동작(release 라벨 매칭)으로
+> 되돌아가는 순간 필수가 되는 안전벨트. ③ probeSelector 는 NilUsesHelmValues 를 안 건드려
+> 여전히 라벨 매칭 — Probe CR 을 쓰게 되면 같은 함정이 재현될 지점.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면
