@@ -237,6 +237,50 @@ python3 -c "import base64,re; c=open('/tmp/r.yaml').read(); \
 배포 전 수동 준비물: `kubectl -n monitoring create secret generic alertmanager-slack-webhook
 --from-literal=url=https://hooks.slack.com/services/<...>`
 
+### 7단계: 환경 분기 + 시크릿 (values-prod.yaml 미러링)
+
+prod 전용 커스텀 템플릿 2개 — `{{- if eq .Values.environment "prod" }}` 게이트:
+- `grafana-serviceaccount.yaml`: OAuth 용 IRSA ServiceAccount
+- `grafana-secretproviderclass.yaml`: Secrets Manager → grafana-google-oauth Secret 동기화
+
+OAuth 시크릿 전달 경로 (한 고리라도 빠지면 로그인 실패):
+```
+AWS Secrets Manager (prod/grafana/oauth, JSON)
+  → SecretProviderClass (jmesPath 로 client_id/secret 추출)
+  → grafana pod 의 extraSecretMounts (CSI 마운트 — 이게 있어야 동기화 발동)
+  → k8s Secret grafana-google-oauth 생성 (secretObjects)
+  → envFromSecret 으로 컨테이너 env 주입
+  → grafana.ini 의 ${GF_AUTH_GOOGLE_CLIENT_ID} 참조
+```
+
+dev/prod 철학 차이 (렌더 검증 완료):
+
+| 항목 | dev | prod |
+|---|---|---|
+| 스토리지 | emptyDir (churn 회피) | PVC gp2 (Prometheus 50Gi / Grafana 10Gi / AM 5Gi) |
+| retention | 7d / 8GB | 30d / 45GB |
+| defaultRules | 알림 전부 off + 수동 큐레이션 (28개) | upstream 큐레이션 on + `disabled` 킬스위치 (117개) |
+| 자체 룰 | infra-alerts (전체 정의) | infra-extra (upstream 이 못 덮는 보강만) |
+| Grafana 인증 | admin 비밀번호 | Google OAuth (IRSA + CSI) |
+| admission webhook | off | on (patch Job 만 off) |
+| EKS 관리형 (etcd/scheduler/…) | (기본값) | 명시적 off — dead target 방지 |
+
+```bash
+# 환경 게이트 검증 — dev 렌더에는 prod 리소스가 없어야 한다
+helm template ... -f values.yaml -f values-prod.yaml | grep -c "kind: SecretProviderClass"  # 1
+helm template ... -f values.yaml -f values-dev.yaml  | grep -c "kind: SecretProviderClass"  # 0
+
+# defaultRules.disabled 킬스위치 검증 — upstream TargetDown 은 사라지고 대체룰만 1회
+grep -c "alert: TargetDown" /tmp/prod.yaml      # → 1
+grep -c "alert: KubeHpaMaxedOut" /tmp/prod.yaml # → 0
+```
+
+> 배운 것: ① `defaultRules.disabled.<알림이름>: true` 는 그룹 단위 on/off 와 별개인
+> 알림 단위 킬스위치 — 그룹은 켜되 노이즈만 제거할 수 있다. ② per-node 타겟
+> (kubelet/node-exporter)은 노드 scale-in 마다 down 이 정상이라 % 기반 TargetDown 이
+> 상시 오탐 → 제외 + absent() 가드로 대체하는 패턴. ③ upstream 의 severity=info 알림은
+> Alertmanager route 에서 일괄 무음 처리 (룰은 살아있어 Grafana 에선 보임).
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면
