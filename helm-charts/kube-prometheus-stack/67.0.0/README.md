@@ -123,6 +123,29 @@ namespace, 스케줄링), `prometheus.prometheusSpec`(retention/emptyDir/selecto
 `kubelet`/`kubeStateMetrics`/`nodeExporter` on, `coreDns` selector 오버라이드,
 `prometheus-node-exporter` 전체 taint 허용, `kube-state-metrics` nodegroup 핀.
 
+### 3단계: defaultRules 선별 (recording rule 만 유지)
+
+```bash
+# 1. baseline — 기본 defaultRules 가 만드는 룰 측정
+#    PrometheusRule 문서만 추출해서 alert/record 개수를 센다
+#    (렌더 YAML 에서 recording rule 은 `- expr:` 로 시작하고 record: 가 뒤에 오므로
+#     `- record:` 패턴으로 세면 0개로 잘못 나온다)
+awk '/^kind: PrometheusRule/{r=1} /^---/{r=0} r' /tmp/render.yaml > /tmp/rules.yaml
+grep -cE '^\s+- alert:' /tmp/rules.yaml   # → 145개 (알림)
+grep -cE '^\s+record:' /tmp/rules.yaml    # → 85개 (recording)
+
+# 2. values-dev.yaml 에 defaultRules.rules 그룹별 on/off 적용 후 재측정
+#    → PrometheusRule 35개 → 12개, alert 145 → 0, record 85 → 44
+```
+
+> 검증 결과: 남은 12개 리소스는 전부 recording rule 그룹 — `k8s.rules.*`(container
+> cpu/mem 집계 7개), `kubelet.rules`(quantile), `kube-prometheus-general.rules`,
+> `kube-prometheus-node-recording.rules`, `node.rules`, `node-exporter.rules`(USE method).
+> 기본 대시보드(k8s-resources-*, nodes, node-rsrc-use, kubelet)가 이 recording rule 의
+> 결과 메트릭을 직접 조회하므로, 꺼버리면 대시보드가 전부 No data 가 된다.
+> 알림 룰 145개를 끈 이유: 6단계에서 additionalPrometheusRulesMap 으로 필요한 알림만
+> 직접 관리할 예정 (기본 알림은 노이즈가 많고 환경에 안 맞는 임계값이 섞여 있음).
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면

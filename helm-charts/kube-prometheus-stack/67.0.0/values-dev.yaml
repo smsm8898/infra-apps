@@ -140,3 +140,37 @@ kube-prometheus-stack:
         operator: Equal
         value: dev-ng
         effect: NoSchedule
+
+  # Default rules - 알림 룰은 additionalPrometheusRulesMap 로 직접 관리할 예정이라
+  # 알림 그룹은 전부 off. 단, 기본 대시보드(k8s-resources-*, nodes, node-rsrc-use 등)가
+  # 참조하는 recording rule 그룹은 켜야 패널에 데이터가 뜸 (없으면 전부 No data).
+  defaultRules:
+    create: true
+    rules:
+      alertmanager: false
+      etcd: false
+      configReloaders: false
+      general: false
+      k8s: true                         # recording: container cpu/mem 집계 (k8s-resources-*)
+      kubeApiserverAvailability: false
+      kubeApiserverBurnrate: false
+      kubeApiserverHistogram: false
+      kubeApiserverSlos: false
+      kubeControllerManager: false
+      kubelet: true                     # recording: kubelet quantile (kubelet 대시보드)
+      kubeProxy: false
+      kubePrometheusGeneral: true       # recording
+      kubePrometheusNodeRecording: true # recording
+      kubernetesApps: false
+      kubernetesResources: false
+      kubernetesStorage: false
+      kubernetesSystem: false
+      kubeSchedulerAlerting: false
+      kubeSchedulerRecording: false
+      kubeStateMetrics: false
+      network: false
+      node: true                        # recording: node.rules (nodes/cluster 대시보드)
+      nodeExporterAlerting: false
+      nodeExporterRecording: true       # recording: USE method (node-rsrc-use 대시보드)
+      prometheus: false
+      prometheusOperator: false
