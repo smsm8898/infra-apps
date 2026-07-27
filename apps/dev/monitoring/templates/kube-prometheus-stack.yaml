@@ -1,0 +1,41 @@
+{{- if .Values.applications.kubePrometheusStack.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: {{ $.Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ $.Values.argocd.project }}
+  source:
+    path: helm-charts/kube-prometheus-stack/{{ $.Values.applications.kubePrometheusStack.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      releaseName: kube-prometheus-stack
+      valueFiles:
+      - values.yaml
+      - values-{{ $.Values.environment }}.yaml
+  syncPolicy:
+    automated:
+      {{- toYaml $.Values.argocd.syncPolicy.automated | nindent 6 }}
+    syncOptions:
+      {{- toYaml $.Values.argocd.syncPolicy.syncOptions | nindent 6 }}
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      # 거대 prometheus-operator CRD(>256KB)를 sync 마다 재apply 하면 client-side
+      # apply 의 last-applied-configuration annotation 이 256KB 한계를 넘어
+      # "annotations: Too long" 으로 실패 -> OutOfSync 고착. 이미 Synced 인 CRD 는
+      # 건너뛰도록 변경된 리소스만 apply.
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}
