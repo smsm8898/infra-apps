@@ -1,0 +1,1225 @@
+{
+  "uid": "reco-api-monitoring",
+  "title": "Reco API Monitoring",
+  "description": "reco API 관측 대시보드 - [Prometheus] RED Metrics & [Loki] Logs + Kubernetes resource status",
+  "tags": [
+    "reco-api",
+    "red",
+    "logs",
+    "k8s resources"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(http_requests_total{namespace=\"reco\"}, handler)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Handler",
+        "multi": true,
+        "name": "handler",
+        "options": [],
+        "query": "label_values(http_requests_total{namespace=\"reco\"}, handler)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "_comment": "============================== DETAILS (surface) ==============================",
+      "id": 100,
+      "type": "row",
+      "title": "Details (surface)",
+      "description": "reco-api에서 측정된 Metrics를 endpoint별로 시각화",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "Request Rate (req/s)",
+      "description": "[Metrics] Request on reco-api from prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler) (rate(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[5m]))",
+          "legendFormat": "{{handler}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 102,
+      "type": "timeseries",
+      "title": "p95 Latency",
+      "description": "[Metrics] Duration on reco-api from prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket{namespace=\"reco\", handler=~\"$handler\"}[5m])))",
+          "legendFormat": "{{handler}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 103,
+      "type": "timeseries",
+      "title": "Errors (req/s)",
+      "description": "[Metrics] Error Rate on reco-api from prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*5xx.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*4xx.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler, status) (rate(http_requests_total{namespace=\"reco\", status=~\"4xx|5xx\", handler=~\"$handler\"}[5m])) or (0 * sum by (handler) (rate(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[5m])) unless on() sum(rate(http_requests_total{namespace=\"reco\", status=~\"4xx|5xx\", handler=~\"$handler\"}[5m])))",
+          "legendFormat": "{{handler}} {{status}}"
+        }
+      ]
+    },
+    {
+      "_comment": "============================== RESOURCES ==============================",
+      "id": 200,
+      "type": "row",
+      "title": "Resources",
+      "description": "reco-api에서 측정된 Metrics를 endpoint별로 수치화",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 201,
+      "type": "table",
+      "title": "[RED] Reco API Endpoints",
+      "description": "Reco API 엔드포인트별 집계 (선택한 시간범위 기준)\n- REQUESTS: 총 요청 수\n- TOTAL TIME: 요청 처리에 쓴 시간의 합계 (트래픽 × 평균 처리시간 → 서버 시간을 어느 endpoint가 많이 쓰는지)\n- p95 LATENCY: 요청의 95%가 이 시간 안에 처리됨\n- ERRORS: 5xx 응답 수\n- ERROR RATE: 5xx ÷ 전체 요청 비율",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "requests",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "total_time",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler, method) (increase(http_request_duration_seconds_sum{namespace=\"reco\", handler=~\"$handler\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, handler, method) (rate(http_request_duration_seconds_bucket{namespace=\"reco\", handler=~\"$handler\"}[$__range])))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "errors",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", status=\"5xx\", handler=~\"$handler\"}[$__range])) or 0 * sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "err_rate",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", status=\"5xx\", handler=~\"$handler\"}[$__range])) / sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[$__range])) or 0 * sum by (handler, method) (increase(http_requests_total{namespace=\"reco\", handler=~\"$handler\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "handler": "RESOURCE",
+              "method": "METHOD",
+              "Value #requests": "REQUESTS",
+              "Value #total_time": "TOTAL TIME",
+              "Value #p95": "p95 LATENCY",
+              "Value #errors": "ERRORS",
+              "Value #err_rate": "ERROR RATE"
+            },
+            "indexByName": {
+              "handler": 0,
+              "method": 1,
+              "Value #requests": 2,
+              "Value #total_time": 3,
+              "Value #p95": 4,
+              "Value #errors": 5,
+              "Value #err_rate": 6,
+              "Time": 7
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "REQUESTS",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "REQUESTS"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlPu"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TOTAL TIME"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 LATENCY"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-GrYlRd"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR RATE"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.01
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.05
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RESOURCE"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 320
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "_comment": "============================== PODS ==============================",
+      "id": 300,
+      "type": "row",
+      "title": "Pods Status",
+      "description": "reco API pod의 상태를 수치화",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 301,
+      "type": "table",
+      "title": "Pods",
+      "description": "pod별 상태/수명/재시작/리소스 사용률",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "status",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod, phase) (kube_pod_status_phase{namespace=\"reco\"} == 1)",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "age",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=\"reco\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "ready",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (kube_pod_status_ready{namespace=\"reco\", condition=\"true\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "restarts",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"reco\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "cpu",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"reco\", container!=\"\", image!=\"\"}[5m])) / sum by (pod) (kube_pod_container_resource_limits{namespace=\"reco\", resource=\"cpu\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "mem",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"reco\", container!=\"\", image!=\"\"}) / sum by (pod) (kube_pod_container_resource_limits{namespace=\"reco\", resource=\"memory\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value #status": true
+            },
+            "renameByName": {
+              "pod": "POD",
+              "phase": "STATUS",
+              "Value #age": "AGE",
+              "Value #ready": "READY",
+              "Value #restarts": "RESTARTS",
+              "Value #cpu": "CPU USAGE/LIMITS",
+              "Value #mem": "MEM USAGE/LIMITS"
+            },
+            "indexByName": {
+              "pod": 0,
+              "phase": 1,
+              "Value #age": 2,
+              "Value #ready": 3,
+              "Value #restarts": 4,
+              "Value #cpu": 5,
+              "Value #mem": 6,
+              "Time": 7,
+              "Value #status": 8
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "POD",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AGE"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RESTARTS"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU USAGE/LIMITS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.7
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.9
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MEM USAGE/LIMITS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.7
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.9
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 302,
+      "type": "timeseries",
+      "title": "CPU (cores)",
+      "description": "pod별 CPU 사용량(빨간 점선 = 현재 limit)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"reco\", container!=\"\", image!=\"\"}[5m]))",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=\"reco\", resource=\"cpu\"})",
+          "legendFormat": "{{pod}} (limit)"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/\\(limit\\)$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 303,
+      "type": "timeseries",
+      "title": "Memory (working set)",
+      "description": "pod별 메모리 working set(빨간 점선=현재 limit)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 29,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"reco\", container!=\"\", image!=\"\"})",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=\"reco\", resource=\"memory\"})",
+          "legendFormat": "{{pod}} (limit)"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/\\(limit\\)$/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "_comment": "============================== LOGS (Loki) ==============================",
+      "id": 400,
+      "type": "row",
+      "title": "Logs (Loki) — 빈 응답·에러",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 401,
+      "type": "timeseries",
+      "title": "빈 응답 비율",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "lineWidth": 1
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "(sum by (http_route) (rate({namespace=\"reco\", app=\"reco-api\"} | json | reco_result_count != `` | reco_result_count = 0 [$__auto]))) / (sum by (http_route) (rate({namespace=\"reco\", app=\"reco-api\"} | json | reco_result_count != `` [$__auto])))",
+          "legendFormat": "{{http_route}}"
+        }
+      ],
+      "description": "추천이 200 OK 로 빈 배열을 반환한 비율 — 상태코드·metrics 로는 안 보이는 soft 실패. 라우터가 세팅한 reco.result_count 기반."
+    },
+    {
+      "id": 402,
+      "type": "timeseries",
+      "title": "응답 아이템 수 중앙값",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 38,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "lineWidth": 1
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "quantile_over_time(0.5, {namespace=\"reco\", app=\"reco-api\"} | json | reco_result_count != `` | unwrap reco_result_count [$__auto]) by (http_route)",
+          "legendFormat": "{{http_route}}"
+        }
+      ],
+      "description": "라우트(엔드포인트)별 응답 아이템 수 중앙값 — 추천 풀이 얇아지는 추세 감지 (예: 새벽 라이브 감소, CF 커버리지 축소)."
+    },
+    {
+      "id": 403,
+      "type": "logs",
+      "title": "error / warning 로그",
+      "description": "level=error/warning 라인(reco-api: request_id 로 요청 전체 추적)",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 24,
+        "h": 10
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=\"reco\", app=\"reco-api\"} | json | level=~\"error|warning\""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{{- /*
+  커스텀 Grafana 대시보드 배포 패턴:
+  dashboards/*.json 을 .Files.Get 으로 읽어 ConfigMap 에 담고,
+  grafana_dashboard: "1" 라벨을 붙이면 Grafana sidecar 가 자동 로드한다.
+  (values 의 grafana.sidecar.dashboards.label 과 일치해야 함)
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-reco-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: kube-prometheus-stack
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  reco-api-monitoring.json: |-
+{{ .Files.Get "dashboards/reco-api-monitoring.json" | indent 4 }}

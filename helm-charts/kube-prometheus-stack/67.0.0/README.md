@@ -146,6 +146,32 @@ grep -cE '^\s+record:' /tmp/rules.yaml    # → 85개 (recording)
 > 알림 룰 145개를 끈 이유: 6단계에서 additionalPrometheusRulesMap 으로 필요한 알림만
 > 직접 관리할 예정 (기본 알림은 노이즈가 많고 환경에 안 맞는 임계값이 섞여 있음).
 
+### 4단계: Grafana provisioning + 커스텀 대시보드
+
+```bash
+# 1. 대시보드 JSON 작성 (dashboards/reco-api-monitoring.json)
+#    JSON 유효성 + uid/패널 수 확인
+python3 -c "import json; d=json.load(open('dashboards/reco-api-monitoring.json')); \
+  print(d['uid'], len(d['panels']))"
+
+# 2. templates/grafana-dashboard-reco-api.yaml 작성 (.Files.Get + grafana_dashboard 라벨)
+#    values-dev.yaml 에 grafana 섹션 추가 후 렌더 검증
+helm template kube-prometheus-stack . -f values.yaml -f values-dev.yaml > /tmp/r.yaml
+grep -A8 "name: grafana-dashboard-reco-api" /tmp/r.yaml   # ConfigMap + 라벨 + JSON 임베드
+grep -E '^\s+- name: grafana-sc-' /tmp/r.yaml             # sidecar 컨테이너 2개
+awk '/^kind: Ingress/,/^---/' /tmp/r.yaml                 # ALB Ingress + host
+```
+
+> 대시보드 전달 경로: `dashboards/*.json` --(.Files.Get)--> ConfigMap(`grafana_dashboard: "1"`
+> 라벨) --(sidecar 가 라벨 감시)--> `/tmp/dashboards` 에 파일 생성 --(dashboardProviders 의
+> file provider)--> Grafana 로드. 어느 한 고리(라벨 이름, folder 경로, provider path)라도
+> 어긋나면 대시보드가 안 뜬다.
+>
+> 확인한 것: values 에서 값이 null 인 annotation(ssl-certificate 등 placeholder)은 렌더에서
+> 조용히 탈락 — placeholder 를 null 로 두는 개인 repo 컨벤션과 잘 맞음.
+> grafana subchart 리소스 이름은 `kube-prometheus-stack-grafana` — 부모의 fullnameOverride
+> 는 subchart 에 전파되지 않음 (subchart 는 자기 fullname 을 따로 계산).
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면

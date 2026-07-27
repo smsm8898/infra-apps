@@ -103,6 +103,97 @@ kube-prometheus-stack:
           value: dev-ng
           effect: NoSchedule
 
+  # Grafana
+  grafana:
+    enabled: true
+
+    # 단일 replica (POC)
+    replicas: 1
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+    # dev: emptyDir. 대시보드/데이터소스는 provisioning 으로 자동 복원되므로
+    # PVC 불필요 (재시작 시 유실되는 건 수동 편집분뿐)
+    persistence:
+      enabled: false
+
+    # POC 용 단순 비밀번호 (prod 는 OAuth 로 대체 예정 - 7단계)
+    adminPassword: admin
+
+    # 기본 대시보드 시간대 - 미지정 시 UTC 로 표시됨 (browser = 보는 사람 로컬, KST)
+    defaultDashboardsTimezone: browser
+
+    # 짧은 auto-refresh(5s 등)로 인한 Prometheus 조회 폭주 방지
+    grafana.ini:
+      dashboards:
+        min_refresh_interval: 30s
+
+    # sidecar: grafana_dashboard: "1" 라벨이 붙은 ConfigMap 을 감시해서
+    # 대시보드를 자동 로드 (templates/grafana-dashboard-*.yaml 과 연결)
+    sidecar:
+      datasources:
+        enabled: true
+        defaultDatasourceEnabled: true
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        folder: /tmp/dashboards
+        provider:
+          foldersFromFilesStructure: true
+
+    # sidecar 가 내려준 JSON 파일을 읽을 file provider
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: 'default'
+            orgId: 1
+            folder: ''
+            type: file
+            disableDeletion: false
+            editable: true
+            options:
+              path: /tmp/dashboards
+
+    # upstream 내장 대시보드 import 목록은 비움 - 커스텀은 전부 ConfigMap 으로 제공
+    dashboards: {}
+
+    # Ingress (internal ALB) - reco-api 차트와 동일 컨벤션
+    ingress:
+      enabled: true
+      ingressClassName: alb
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internal
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/backend-protocol: HTTP
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: '443'
+        alb.ingress.kubernetes.io/ssl-certificate:    # certificate 위치
+        alb.ingress.kubernetes.io/group.name:    # 공용 internal ALB group
+        alb.ingress.kubernetes.io/load-balancer-attributes:    # access log 설정
+        alb.ingress.kubernetes.io/healthcheck-path: /api/health
+      hosts:
+        - grafana.dev.example.com
+      path: /*
+      pathType: ImplementationSpecific
+      tls: []
+
+    nodeSelector:
+      node-group-name: dev-ng
+
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule
+
   # kubelet/cAdvisor - Pod CPU/Memory 메트릭
   kubelet:
     enabled: true
