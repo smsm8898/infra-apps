@@ -1,9 +1,142 @@
+# Dev environment values for kube-prometheus-stack
+# POC 구성 - 최소 리소스, no HA
+
 environment: dev
 
-# dev 전용 override는 kube-prometheus-stack 키 아래에 추가한다.
-# 주의: 값 없이 `kube-prometheus-stack:` 만 남기면(null) Helm 이 values.yaml 의
-# 해당 subtree 전체를 삭제하므로, override 가 없으면 키 자체를 주석으로 둔다.
-# kube-prometheus-stack:
-#   prometheus:
-#     prometheusSpec:
-#       retention: 7d
+kube-prometheus-stack:
+  # Naming - 모든 리소스 이름 prefix 를 monitoring 으로 통일
+  nameOverride: ""
+  fullnameOverride: "monitoring"
+
+  # Prometheus Operator
+  prometheusOperator:
+    enabled: true
+
+    # admission webhook 비활성화 - patch Job 이 ArgoCD hook 재시도와 만나면
+    # "already exists" 로 실패하고, 67.0.0 deployment 모드에는 upstream 템플릿
+    # 버그가 있음. dev POC 에는 불필요.
+    admissionWebhooks:
+      enabled: false
+
+    # operator 가 CR(ServiceMonitor/PodMonitor/PrometheusRule)을 watch 할 네임스페이스
+    namespaces:
+      releaseNamespace: true
+      additional:
+        - reco  # reco-api PodMonitor (RED 메트릭)
+
+    podLabels:
+      app: kube-prometheus-stack-operator
+      release: kube-prometheus-stack
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+    nodeSelector:
+      node-group-name: dev-ng
+
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule
+
+  # Prometheus Server
+  prometheus:
+    enabled: true
+
+    prometheusSpec:
+      # 단일 replica (POC)
+      replicas: 1
+
+      # 보존 기간 (emptyDir sizeLimit 아래로 유지)
+      retention: 7d
+      retentionSize: 8GB
+
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+
+      # dev: 데이터 유실 허용. RWO EBS 는 노드 축출/재스케줄링 시 Multi-Attach,
+      # PV node-affinity 문제로 OutOfSync churn 을 만들므로 emptyDir 사용.
+      storageSpec:
+        emptyDir:
+          sizeLimit: 10Gi
+
+      scrapeInterval: 30s
+      scrapeTimeout: 10s
+      evaluationInterval: 30s
+
+      # ⚠️ `{}` 는 Helm 템플릿에서 falsy 라 빈 셀렉터 지정만으론 효과가 없고,
+      # *NilUsesHelmValues=false 가 실제 "전체 선택"을 만든다. 이게 없으면
+      # 셀렉터가 release=<릴리스명> 라벨 매칭으로 떨어지는데, wrapper 차트의
+      # _helpers.tpl 이 upstream labels 헬퍼를 덮어써 release 라벨이 안 붙으므로
+      # upstream ServiceMonitor(kubelet/coredns 등)와 PrometheusRule 이 전부
+      # 선택에서 빠진다 (dashboards No data 의 근본 원인).
+      ruleSelectorNilUsesHelmValues: false
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      serviceMonitorNamespaceSelector: {}
+      podMonitorSelector: {}
+      podMonitorNamespaceSelector: {}
+
+      # 멀티 클러스터 구분용 external label (federation/remote-write 대비)
+      externalLabels:
+        cluster: dev
+        environment: dev
+
+      nodeSelector:
+        node-group-name: dev-ng
+
+      tolerations:
+        - key: node-group-name
+          operator: Equal
+          value: dev-ng
+          effect: NoSchedule
+
+  # kubelet/cAdvisor - Pod CPU/Memory 메트릭
+  kubelet:
+    enabled: true
+
+  # coredns ServiceMonitor 기본 selector 는 Service 의 release 라벨을 요구하는데,
+  # wrapper labels 헬퍼가 release 를 안 붙여 타겟이 0개가 됨 (CoreDNSDown 발화 원인).
+  # Service 에 실제로 붙는 app/jobLabel 라벨로 오버라이드.
+  coreDns:
+    serviceMonitor:
+      selector:
+        matchLabels:
+          app: kube-prometheus-stack-coredns
+          jobLabel: coredns
+
+  # kube-state-metrics - 오브젝트 상태/capacity 메트릭
+  kubeStateMetrics:
+    enabled: true
+
+  nodeExporter:
+    enabled: true
+
+  # node-exporter DaemonSet 은 모든 노드에서 떠야 함 -> 모든 taint 허용
+  prometheus-node-exporter:
+    tolerations:
+      - operator: Exists
+
+  # kube-state-metrics 단일 Deployment -> dev nodegroup 핀
+  # (nodeSelector 만 두면 nodegroup taint 때문에 Pending → kube_* 메트릭 전멸.
+  #  toleration 필수)
+  kube-state-metrics:
+    nodeSelector:
+      node-group-name: dev-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule

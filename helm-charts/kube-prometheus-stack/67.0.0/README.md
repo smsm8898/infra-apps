@@ -93,6 +93,36 @@ diff /tmp/baseline-render.yaml /tmp/after-render.yaml
 > 검증 결과: diff 출력 없음 (완전 동일). upstream 기본값을 values.yaml 에 복사하는 것은
 > 순수 중복이며, 환경별 파일에 변경분만 적어도 렌더 결과가 같음을 확인.
 
+### 2단계: Operator + 코어 수집기 (+ `_helpers.tpl` 함정 재현)
+
+```bash
+# 1. 함정 재현 전 baseline — upstream 리소스의 release 라벨 개수 측정
+helm template kube-prometheus-stack helm-charts/kube-prometheus-stack/67.0.0 \
+  -f .../values.yaml -f .../values-dev.yaml > /tmp/before-helpers.yaml
+grep -c 'release: "kube-prometheus-stack"' /tmp/before-helpers.yaml   # → 120개
+
+# 2. templates/_helpers.tpl 추가 (upstream 과 동명의 labels 헬퍼 정의) 후 재렌더
+helm template ... > /tmp/after-helpers.yaml
+grep -c 'release: "kube-prometheus-stack"' /tmp/after-helpers.yaml    # → 15개 (급감!)
+
+# 3. 어떤 라벨이 사라졌는지 확인 — release/chart/heritage 가 전부 소실
+diff /tmp/before-helpers.yaml /tmp/after-helpers.yaml | head -30
+
+# 4. values-dev.yaml 에 2단계 설정 적용 후 selector 가 "전체 선택"이 됐는지 확인
+helm template ... | grep -E "serviceMonitorSelector|ruleSelector"     # → {} (전체 선택)
+```
+
+> 검증 결과: named template 은 Helm 전역이라 wrapper 의 `_helpers.tpl` 이 upstream
+> subchart 의 동명 헬퍼를 덮어씀 → release 라벨 120개 → 15개 (남은 15개는 자체 헬퍼를
+> 쓰는 grafana/kube-state-metrics/node-exporter subchart). Prometheus CR 의 기본
+> selector 는 `release=<릴리스명>` 라벨 매칭이므로 upstream ServiceMonitor/Rule 이
+> 전부 선택에서 빠짐 → `*SelectorNilUsesHelmValues: false` 로 "전체 선택" 전환이 필수.
+
+이 단계에서 values-dev.yaml 에 추가된 설정: `prometheusOperator`(webhook off, watch
+namespace, 스케줄링), `prometheus.prometheusSpec`(retention/emptyDir/selector/externalLabels),
+`kubelet`/`kubeStateMetrics`/`nodeExporter` on, `coreDns` selector 오버라이드,
+`prometheus-node-exporter` 전체 taint 허용, `kube-state-metrics` nodegroup 핀.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면
