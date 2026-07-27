@@ -203,6 +203,40 @@ grep -oE '(job|namespace|service)=\\?"[^"\\]*' dashboards/reco-api-monitoring.js
 > 되돌아가는 순간 필수가 되는 안전벨트. ③ probeSelector 는 NilUsesHelmValues 를 안 건드려
 > 여전히 라벨 매칭 — Probe CR 을 쓰게 되면 같은 함정이 재현될 지점.
 
+### 6단계: 알림 파이프라인 (additionalPrometheusRulesMap + Alertmanager)
+
+values-dev.yaml 에 추가: `alertmanager`(Slack webhook secret 마운트 + 라우팅/템플릿),
+`additionalPrometheusRulesMap`(reco-api-alerts 2개 + infra-alerts 26개 = alert 28개, 7그룹).
+kafka/rds/awsCni 룰은 해당 인프라가 없어 제외. Robusta 미도입이라 라우팅 트리는
+단순화 (기본 receiver = slack-default, Watchdog 만 null).
+
+네이밍 컨벤션 (upstream/회사 관례 준수): map 키는 kebab-case(`reco-api-alerts`,
+`infra-alerts`), 그룹 이름은 `<도메인>.<영역>` dot 계층(`reco-api.alerts`,
+`infra.general`, `infra.node`). 그룹 이름은 Prometheus/Grafana UI 의 룰 목록에 그대로
+노출되므로 도메인 prefix 로 정렬·검색이 쉬워진다.
+
+```bash
+# 렌더 후 alert 수 / 그룹 확인 — additionalPrometheusRulesMap 은 kind: List 로
+# 감싸여 렌더되므로 ^kind: PrometheusRule 앵커 grep 으로는 안 잡힌다 (측정 함정 2)
+grep -cE '^\s+- alert:' /tmp/r.yaml                       # → 28
+awk '/kind: List/,0' /tmp/r.yaml | grep '\- name: infra\.'
+
+# Alertmanager config 는 Secret 에 base64 로 들어감 — 디코드해서 검증
+python3 -c "import base64,re; c=open('/tmp/r.yaml').read(); \
+  print(base64.b64decode(re.search(r'alertmanager\.yaml: (\S+)',c).group(1)).decode()[:400])"
+```
+
+> 배운 것: ① values 파일은 Helm 이 템플릿 처리하지 않으므로 Alertmanager 의 Go 템플릿
+> `{{ }}` 를 이스케이프 없이 그대로 쓸 수 있다. ② Watchdog(vector(1), 항상 발화) 은
+> dead-man's switch — route 에서 null 로 무음 처리하고, "안 오면 파이프라인 사망" 신호로
+> 외부에서 감시하는 용도. ③ 모니터링 자체 장애(KSM down, AM 전송 실패, Prometheus-AM
+> 단절)는 별도 룰로 감시 — 모니터링이 죽으면 "알림 없음 = 정상" 으로 오인하기 때문.
+> ④ Slack webhook 은 git 에 넣지 않고 k8s secret (key: url) 을 alertmanagerSpec.secrets
+> 로 마운트 → slack_api_url_file 로 참조.
+
+배포 전 수동 준비물: `kubectl -n monitoring create secret generic alertmanager-slack-webhook
+--from-literal=url=https://hooks.slack.com/services/<...>`
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면

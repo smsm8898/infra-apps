@@ -194,6 +194,79 @@ kube-prometheus-stack:
         value: dev-ng
         effect: NoSchedule
 
+  # Alertmanager - Slack 알림
+  alertmanager:
+    enabled: true
+
+    alertmanagerSpec:
+      replicas: 1
+
+      # Slack webhook URL 은 k8s secret 'alertmanager-slack-webhook' (git 미포함,
+      # key: url) 을 /etc/alertmanager/secrets/<name>/ 에 마운트해서 참조.
+      # 생성: kubectl -n monitoring create secret generic alertmanager-slack-webhook \
+      #         --from-literal=url=https://hooks.slack.com/services/<...>
+      secrets:
+        - alertmanager-slack-webhook
+
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+
+      # dev: 알림 상태(무음/그룹핑) 영속 불필요 + PVC churn 회피
+      storage:
+        emptyDir: {}
+
+      nodeSelector:
+        node-group-name: dev-ng
+
+      tolerations:
+        - key: node-group-name
+          operator: Equal
+          value: dev-ng
+          effect: NoSchedule
+
+    # 이 아래 {{ }} 는 Alertmanager 의 Go 템플릿 문법.
+    # values 파일은 Helm 이 템플릿 처리하지 않으므로 이스케이프 불필요.
+    config:
+      global:
+        slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+        resolve_timeout: 5m
+      route:
+        receiver: slack-default
+        group_by: ['alertname', 'namespace']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          # dead-man's switch — 항상 발화하는 Watchdog 은 무음 처리
+          # (외부 감시 시스템이 "Watchdog 이 안 온다 = 파이프라인 죽음" 을 감지하는 용도)
+          - receiver: 'null'
+            matchers:
+              - alertname = "Watchdog"
+      receivers:
+        - name: 'null'
+        - name: slack-default
+          slack_configs:
+            # channel 생략 = webhook 에 고정된 기본 채널로 전송
+            - send_resolved: true
+              color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+              title: '[{{ .Status | toUpper }}:{{ .CommonLabels.severity }}] {{ .CommonLabels.alertname }} (dev)'
+              # 미지정 시 기본 링크가 Alertmanager 내부 주소로 생성돼 브라우저에서 안 열림.
+              # Grafana Alerting 목록을 해당 alertname 으로 필터해 열기.
+              title_link: 'https://grafana.dev.example.com/alerting/list?search={{ .CommonLabels.alertname | urlquery }}'
+              # 라벨 기반 딥링크: pod 알림 → k8s-resources-pod, node 알림 → k8s-resources-node
+              # (uid 는 upstream 기본 대시보드의 고정값이라 어느 클러스터든 동일)
+              text: |-
+                {{ range .Alerts }}• *{{ .Labels.severity }}* {{ if .Labels.namespace }}`{{ .Labels.namespace }}`{{ end }} — {{ .Annotations.summary }}
+                {{ if .Annotations.description }}{{ .Annotations.description }}
+                {{ end }}{{ if .Labels.pod }}    ↳ <https://grafana.dev.example.com/d/6581e46e4e5c7ba40a07646395ef7b23/k8s-resources-pod?var-namespace={{ .Labels.namespace }}&var-pod={{ .Labels.pod }}&from=now-1h&to=now|Pod 리소스 대시보드>
+                {{ end }}{{ if .Labels.node }}    ↳ <https://grafana.dev.example.com/d/200ac8fdbfbb74b39aff88118e4d1c2c/k8s-resources-node?var-node={{ .Labels.node }}&from=now-1h&to=now|Node 리소스 대시보드>
+                {{ end }}{{ end }}
+
   # kubelet/cAdvisor - Pod CPU/Memory 메트릭
   kubelet:
     enabled: true
@@ -265,3 +338,289 @@ kube-prometheus-stack:
       nodeExporterRecording: true       # recording: USE method (node-rsrc-use 대시보드)
       prometheus: false
       prometheusOperator: false
+
+  # 자체 알림 룰 (Slack). additionalLabels 의 release 라벨은 ruleSelector 가
+  # 기본 동작(라벨 매칭)으로 돌아가도 잡히게 하는 안전벨트 (PodMonitor 와 동일 논리).
+  additionalPrometheusRulesMap:
+    # reco-api 앱 레벨 알림 — RED(Rate/Errors/Duration) 방법론 기반.
+    # job명 하드코딩 없이 by(namespace, job) 집계 → 새 API 서비스 자동 커버.
+    # 저트래픽에서는 에러 절대량 floor 와 histogram_quantile 의 NaN 이 오탐을 자동 차단.
+    reco-api-alerts:
+      additionalLabels:
+        release: kube-prometheus-stack
+      groups:
+        - name: reco-api.alerts
+          rules:
+            # RED-Errors: 5xx 비율 5% 초과 & 절대량 floor(≈10건/5m) 동시 충족 5분 지속
+            - alert: RecoHigh5xxErrorRate
+              expr: |-
+                (
+                    sum by (namespace, job) (rate(http_requests_total{namespace="reco",status="5xx"}[5m]))
+                  / sum by (namespace, job) (rate(http_requests_total{namespace="reco"}[5m]))
+                ) > 0.05
+                and
+                  sum by (namespace, job) (rate(http_requests_total{namespace="reco",status="5xx"}[5m])) > 0.033
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "[reco] {{ $labels.job }} 5xx 에러율 {{ $value | humanizePercentage }} (5m)"
+                description: "reco-api 5xx 비율이 5% 초과 & 5분 지속. 상류 서비스의 5xx 유발 여부와 앱 access 로그로 원인 확인."
+            # RED-Duration: p95 레이턴시 500ms 초과 10분 지속
+            - alert: RecoHighLatencyP95
+              expr: |-
+                histogram_quantile(0.95,
+                  sum by (namespace, job, le) (rate(http_request_duration_seconds_bucket{namespace="reco"}[5m]))
+                ) > 0.5
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "[reco] {{ $labels.job }} p95 레이턴시 {{ $value | humanizeDuration }} (5m)"
+                description: "p95 응답시간이 500ms 초과 & 10분 지속. DB/캐시 degrade, 상류 타임아웃, pod CPU 포화 확인."
+    infra-alerts:
+      additionalLabels:
+        release: kube-prometheus-stack
+      groups:
+        - name: infra.general
+          rules:
+            - alert: Watchdog
+              expr: vector(1)
+              labels:
+                severity: none
+              annotations:
+                summary: "Alerting 파이프라인 dead-man's switch (항상 발생, route 에서 무음)"
+            # 코어 인프라 타겟만 (앱 파드 churn 노이즈 회피)
+            - alert: TargetDown
+              expr: up{job=~"node-exporter|kube-state-metrics|kubelet"} == 0
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Infra target down: {{ $labels.job }} ({{ $labels.instance }})"
+                description: "코어 인프라 타겟이 10분 이상 scrape 실패."
+        - name: infra.monitoring
+          rules:
+            # KSM 다운 시 kube_* 기반 알림이 전부 무음이 되므로 별도 critical 신호
+            - alert: KubeStateMetricsDown
+              expr: absent(up{job="kube-state-metrics"} == 1)
+              for: 10m
+              labels:
+                severity: critical
+              annotations:
+                summary: "kube-state-metrics down"
+                description: "KSM 다운 — Pod/Node/Deployment 등 kube_* 기반 알림이 전부 평가 불가(무음)."
+            - alert: AlertmanagerFailedToSendAlerts
+              expr: rate(alertmanager_notifications_failed_total[5m]) > 0
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Alertmanager 알림 전송 실패: {{ $labels.integration }}"
+                description: "Slack 등으로 알림 전송이 5분 이상 실패 중."
+            - alert: PrometheusNotConnectedToAlertmanagers
+              expr: max_over_time(prometheus_notifications_alertmanagers_discovered[5m]) < 1
+              for: 10m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Prometheus 가 Alertmanager 와 연결 안 됨"
+                description: "발생한 알림이 어디로도 전달되지 않음."
+            - alert: PrometheusRuleFailures
+              expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Prometheus 룰 평가 실패"
+                description: "일부 알림 룰이 평가에 실패하고 있음."
+        - name: infra.node
+          rules:
+            - alert: NodeHighCPU
+              expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node CPU 포화: {{ $labels.instance }}"
+                description: "CPU 사용률 90%+ 15분 지속."
+            - alert: NodeHighMemory
+              expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node 메모리 포화: {{ $labels.instance }}"
+                description: "메모리 사용률 90%+ 15분 지속."
+            - alert: NodeFilesystemAlmostFull
+              expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} < 0.1
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "디스크 임박: {{ $labels.instance }} {{ $labels.mountpoint }}"
+                description: "여유 공간 10% 미만 15분 지속."
+            # 노드 컨디션 3종 — kubelet eviction/GC 임박 신호 (사용률 알림과 계층이 다름)
+            - alert: KubeNodeMemoryPressure
+              expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node MemoryPressure: {{ $labels.node }}"
+                description: "5분 이상 MemoryPressure — pod eviction 임박 가능."
+            - alert: KubeNodeDiskPressure
+              expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node DiskPressure: {{ $labels.node }}"
+                description: "5분 이상 DiskPressure — 이미지/컨테이너 GC 와 eviction 임박."
+            - alert: KubeNodePIDPressure
+              expr: kube_node_status_condition{condition="PIDPressure",status="true"} == 1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node PIDPressure: {{ $labels.node }}"
+                description: "노드 프로세스 수 한계 근접 — 프로세스 누수 확인."
+            - alert: KubeNodeCordonedTooLong
+              expr: kube_node_spec_unschedulable == 1
+              for: 1h
+              labels:
+                severity: warning
+              annotations:
+                summary: "Node cordoned 1h+: {{ $labels.node }}"
+                description: "1시간 이상 cordon 유지 — uncordon 누락 확인."
+        - name: infra.storage
+          rules:
+            # node_filesystem 은 호스트 FS 라 PVC 를 못 봄 → kubelet volume stats 로 PVC 감시
+            - alert: KubePersistentVolumeFillingUp
+              expr: (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) < 0.10 and kubelet_volume_stats_available_bytes > 0
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "PVC 임박: {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }}"
+                description: "PVC 여유 공간 10% 미만 15분 지속."
+        - name: infra.workload
+          rules:
+            - alert: KubePodCrashLooping
+              expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "CrashLoop: {{ $labels.namespace }}/{{ $labels.pod }}"
+                description: "컨테이너 {{ $labels.container }} 가 15분간 재시작 3회 초과."
+            # Job 소유 파드 제외 (정상적으로 Pending 가능)
+            - alert: KubePodNotReady
+              expr: sum by (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"}) * on (namespace, pod) group_left() max by (namespace, pod) (kube_pod_owner{owner_kind!="Job"})) > 0
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Pod not ready: {{ $labels.namespace }}/{{ $labels.pod }}"
+                description: "15분 이상 Pending/Unknown 상태."
+            - alert: KubeNodeNotReady
+              expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Node NotReady: {{ $labels.node }}"
+                description: "노드가 5분 이상 Ready 아님."
+            - alert: KubeDeploymentReplicasMismatch
+              expr: (kube_deployment_spec_replicas != kube_deployment_status_replicas_available) and (changes(kube_deployment_status_replicas_updated[10m]) == 0)
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Deployment 복제본 불일치: {{ $labels.namespace }}/{{ $labels.deployment }}"
+                description: "desired replica 만큼 available 하지 않음 15분 지속 (실패/정체된 롤아웃)."
+            - alert: KubeStatefulSetReplicasMismatch
+              expr: (kube_statefulset_status_replicas_ready != kube_statefulset_replicas) and (changes(kube_statefulset_status_replicas_updated[10m]) == 0)
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "StatefulSet 복제본 불일치: {{ $labels.namespace }}/{{ $labels.statefulset }}"
+                description: "ready replica 가 desired 와 다름 15분 지속."
+            # OOM 사후 감지. 두 경로:
+            # 1) 일회성 pod (restartPolicy: Never): 현재 상태가 OOMKilled.
+            #    실패 pod 이 곧 삭제돼도 max_over_time 으로 15분간 발화 유지.
+            # 2) 상시 pod (Deployment 등 restart형): 최근 15분 내 재시작 + lastState 가 OOMKilled.
+            # (increase(last_terminated_reason)>0 방식은 0/1 게이지라 increase 항상 0 → 발화 불가한 죽은 룰)
+            - alert: KubeContainerOOMKilled
+              expr: |-
+                max by (namespace, pod, container) (max_over_time(kube_pod_container_status_terminated_reason{reason="OOMKilled",job="kube-state-metrics"}[15m])) == 1
+                or
+                (
+                  max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{reason="OOMKilled",job="kube-state-metrics"}) == 1
+                  and
+                  max by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{job="kube-state-metrics"}[15m])) > 0
+                )
+              labels:
+                severity: warning
+              annotations:
+                summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }}"
+                description: "컨테이너가 메모리 초과로 종료됨 (메모리 limit 점검 필요)."
+            # OOMKill 사전 감지 — limit 미설정 컨테이너는 분모 시계열이 없어 자동 제외
+            - alert: ContainerMemoryNearLimit
+              expr: |-
+                max by (namespace, pod, container) (container_memory_working_set_bytes{container!="", image!=""})
+                  / max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"}) > 0.90
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Memory near limit: {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }}"
+                description: "메모리 working set 이 limit 의 90%+ 15분 지속 — OOMKill 위험."
+            # CPU limit 포화 지속 (throttling 유발)
+            - alert: ContainerCPUNearLimit
+              expr: |-
+                sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!="", image!=""}[5m]))
+                  / max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="cpu"}) > 0.95
+              for: 30m
+              labels:
+                severity: warning
+              annotations:
+                summary: "CPU at limit: {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }}"
+                description: "CPU 사용률이 limit 의 95%+ 30분 지속 — throttling 지연 가능."
+            # K8s Job 실패 (upstream 알림 그룹 off 라 직접 정의)
+            - alert: KubeJobFailed
+              expr: kube_job_status_failed > 0
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Job 실패: {{ $labels.namespace }}/{{ $labels.job_name }}"
+                description: "실패한 Job 이 15분+ 남아 있음 — 로그 확인 후 정리 필요."
+        # 컨트롤플레인 접점 — absent() 는 "메트릭 소멸"(타겟 전멸/SM 삭제)을 잡음
+        - name: infra.control-plane
+          rules:
+            - alert: KubeAPIServerDown
+              expr: absent(up{job="apiserver"} == 1)
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "kube-apiserver 메트릭 소실 (dev)"
+                description: "apiserver 스크랩 타겟 5분 이상 전멸 — 컨트롤플레인/인증 확인."
+            - alert: CoreDNSDown
+              expr: absent(up{job="coredns"} == 1)
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "CoreDNS 메트릭 소실 (dev)"
+                description: "CoreDNS 타겟 5분 이상 전멸 — 클러스터 DNS 장애 가능성."
+            - alert: CoreDNSHighErrorRate
+              expr: sum(rate(coredns_dns_responses_total{rcode="SERVFAIL"}[5m])) / sum(rate(coredns_dns_responses_total[5m])) > 0.05
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "CoreDNS SERVFAIL 5%+"
+                description: "DNS 응답의 {{ $value | humanizePercentage }} 가 SERVFAIL."
