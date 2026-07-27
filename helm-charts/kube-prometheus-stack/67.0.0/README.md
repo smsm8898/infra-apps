@@ -281,6 +281,23 @@ grep -c "alert: KubeHpaMaxedOut" /tmp/prod.yaml # → 0
 > 상시 오탐 → 제외 + absent() 가드로 대체하는 패턴. ③ upstream 의 severity=info 알림은
 > Alertmanager route 에서 일괄 무음 처리 (룰은 살아있어 Grafana 에선 보임).
 
+### 8단계 (생략): extraManifests 외부 exporter 패턴
+
+kube-prometheus-stack 의 `extraManifests:` 배열에 임의 K8s 리소스(Deployment/Service/
+ServiceMonitor 등)를 넣어 모니터링 부속 컴포넌트를 별도 차트 없이 한 몸으로 배포하는
+패턴. CloudWatch exporter(YACE), blackbox-exporter(+ Probe CRD) 등이 대표 사례.
+현재 스택에 해당 외부 시스템이 없어 생략. 도입 시 주의: Probe CR 을 쓰면
+`probeSelector` 가 아직 라벨 매칭 모드라 `probeSelectorNilUsesHelmValues: false`
+또는 `release: kube-prometheus-stack` 라벨이 필요 (주의사항 참고).
+
+### 최종 검증 (학습 완료 시점)
+
+```bash
+helm lint . -f values.yaml -f values-dev.yaml    # 통과
+helm lint . -f values.yaml -f values-prod.yaml   # 통과
+# 렌더: dev 97개 / prod 98개 리소스, 알림 dev 28 / prod 117
+```
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `kube-prometheus-stack:` 키만 값 없이(null) 남기면

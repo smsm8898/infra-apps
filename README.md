@@ -11,14 +11,17 @@ infra-apps/
 ├── apps/                           # ArgoCD App-of-Apps 배포 설정
 │   ├── dev/                        # 개발 환경
 │   │   ├── arc-system/             # GitHub Actions Runner Controller
+│   │   ├── monitoring/             # kube-prometheus-stack
 │   │   └── reco/                   # 추천 시스템
 │   └── prod/                       # 운영 환경
 │       ├── arc-system/             # GitHub Actions Runner Controller
+│       ├── monitoring/             # kube-prometheus-stack
 │       └── reco/                   # 추천 시스템
 ├── helm-charts/                    # Helm 차트 라이브러리
 │   ├── actions-runner-system/      # Self-hosted GitHub Actions Runner
 │   │   ├── actions-runner-controller/  # ARC 컨트롤러 (upstream 차트 wrapping)
 │   │   └── actions-runner/         # RunnerDeployment + HorizontalRunnerAutoscaler
+│   ├── kube-prometheus-stack/      # 모니터링 스택 (upstream 차트 wrapping + 커스텀 대시보드/알림)
 │   └── reco-api/                   # 추천 시스템
 └── docker/                         # Docker 이미지 빌드 (각 하위 디렉토리 = 1 이미지 빌드 컨텍스트)
     └── actions-runner/             # Self-hosted GitHub Actions Runner
