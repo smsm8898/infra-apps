@@ -71,6 +71,38 @@ helm template airflow helm-charts/airflow/1.18.0 -f .../values.yaml -f .../value
 > 기본값 렌더에는 CeleryExecutor 구성(redis/worker StatefulSet, 내장 postgresql)이
 > 포함된다 — 1단계에서 KubernetesExecutor 로 전환하며 이 구성이 어떻게 줄어드는지 관찰 예정.
 
+### 1단계: 코어 아키텍처 (KubernetesExecutor 전환)
+
+```bash
+# 1. baseline 저장 (CeleryExecutor 기본값)
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step0.yaml
+
+# 2. values-dev.yaml 에 executor/redis/스케줄링/cleanup 적용 후 재렌더
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step1.yaml
+
+# 3. 무엇이 사라지고 무엇이 생겼는지 diff
+diff <(grep -E "^  name: " /tmp/step0.yaml | sort -u) \
+     <(grep -E "^  name: " /tmp/step1.yaml | sort -u)
+```
+
+> 검증 결과 (리소스 39개 → 37개):
+> - **사라짐**: `airflow-redis`(StatefulSet/Service/ServiceAccount), `airflow-redis-password`
+>   (Secret), `airflow-worker`(celery worker StatefulSet) — CeleryExecutor 전용 구성
+> - **생김**: `airflow-cleanup`(CronJob + Role/RoleBinding) — KubernetesExecutor 가
+>   만들어내는 dangling task pod 정리용
+> - 남은 redis/celery 문자열 28개는 전부 템플릿 헤더 **주석**(`## Airflow Redis StatefulSet` 등)
+> - `AIRFLOW__CORE__EXECUTOR=KubernetesExecutor` env 반영 확인
+>
+> 최종 워크로드 9개: Deployment(api-server, dag-processor, scheduler, statsd),
+> StatefulSet(postgresql, triggerer), CronJob(cleanup), Job(create-user, run-airflow-migrations).
+> Airflow 3.x 구조 특징 — webserver 가 **api-server** 로 바뀌고, DAG 파싱이
+> **dag-processor** 로 분리됨.
+
+**함정 발견**: `defaultAirflowRepository` 를 placeholder 로 null 로 두면
+`image: %!s(<nil>):latest` 로 렌더되어 **YAML 파싱 자체가 실패**한다.
+kube-prometheus-stack 4단계에서 확인한 "null annotation 은 조용히 탈락" 은
+map 값에만 해당하고, 문자열 보간(printf)에 쓰이는 값은 렌더를 깨뜨린다.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면

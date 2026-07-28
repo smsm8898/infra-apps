@@ -1,7 +1,93 @@
 environment: dev
 
-# dev 전용 override 는 airflow 키 아래에 추가한다.
-# 주의: 값 없이 `airflow:` 만 남기면(null) Helm 이 values.yaml 의 해당 subtree
-# 전체를 삭제하므로, override 가 없으면 키 자체를 주석으로 둔다.
-# airflow:
-#   executor: "KubernetesExecutor"
+airflow:
+  # Airflow 3.x. 차트의 appVersion(3.0.2)보다 최신 패치를 쓰려면 명시 필요 —
+  # 이 값이 컴포넌트 이미지 태그와 config 호환성 판단 기준이 된다.
+  airflowVersion: '3.0.6'
+
+  # 커스텀 이미지 (provider 패키지, DAG 의존 라이브러리 포함).
+  # ⚠️ 이 값은 이미지 이름 문자열에 보간되므로 placeholder 를 null 로 두면
+  #    `%!s(<nil>):latest` 로 렌더되어 YAML 자체가 깨진다 (annotation 처럼
+  #    조용히 탈락하지 않음). 반드시 문자열 값을 둔다.
+  defaultAirflowRepository: "dev위치.dkr.ecr.ap-northeast-2.amazonaws.com/airflow"  # ECR 위치
+  defaultAirflowTag: "latest"
+
+  images:
+    airflow:
+      pullPolicy: IfNotPresent
+    # KubernetesExecutor 가 task 마다 띄우는 worker pod 은 항상 최신 이미지로
+    pod_template:
+      pullPolicy: Always
+    # migration Job 도 커스텀 이미지 사용 (upstream 기본 이미지엔 provider 없음)
+    useDefaultImageForMigration: false
+
+  # KubernetesExecutor: task 마다 worker pod 을 띄우고 끝나면 정리.
+  # → celery worker StatefulSet / redis broker / flower 가 전부 불필요해진다.
+  executor: "KubernetesExecutor"
+
+  # scheduler 가 task pod 을 생성/삭제할 수 있게 RBAC 부여 (KubernetesExecutor 필수)
+  allowPodLaunching: true
+
+  # CeleryExecutor 전용 broker — KubernetesExecutor 에선 불필요
+  redis:
+    enabled: false
+
+  # 완료/실패 상태로 남은 task pod 정리 CronJob.
+  # KubernetesExecutor 는 pod 을 계속 만들어내므로 dangling pod 청소가 필요.
+  cleanup:
+    enabled: true
+    schedule: "*/15 * * * *"
+    nodeSelector:
+      node-group-name: dev-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule
+
+  # 컨트롤플레인 컴포넌트 공통 스케줄링 (scheduler/api-server/statsd 등).
+  # 컴포넌트별 nodeSelector 가 있으면 그쪽이 우선.
+  nodeSelector:
+    node-group-name: dev-ng
+
+  tolerations:
+    - key: node-group-name
+      operator: Equal
+      value: dev-ng
+      effect: NoSchedule
+
+  # deferrable operator 의 async 대기를 담당. 기본 probe 는 너무 촘촘해서
+  # 부팅/일시 부하 중 헛재시작을 유발 → 완화 (진짜 hang 만 잡도록)
+  triggerer:
+    nodeSelector:
+      node-group-name: dev-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule
+    livenessProbe:
+      initialDelaySeconds: 30
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 60
+
+  # Airflow 3.x 에서 DAG 파싱이 scheduler 와 분리된 독립 컴포넌트.
+  # DAG 파일 수가 많으면 파싱 지연으로 probe 가 실패할 수 있어 동일하게 완화.
+  dagProcessor:
+    livenessProbe:
+      initialDelaySeconds: 30
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 60
+
+  # KubernetesExecutor 의 task pod 은 컨트롤플레인과 분리된 worker nodegroup 에 배치
+  # (task 가 노드를 점유해도 scheduler/api-server 가 영향받지 않게)
+  workers:
+    nodeSelector:
+      node-group-name: dev-worker-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-worker-ng
+        effect: NoSchedule
