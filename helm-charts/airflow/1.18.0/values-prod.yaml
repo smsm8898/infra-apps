@@ -1,0 +1,7 @@
+environment: prod
+
+# prod 전용 override 는 airflow 키 아래에 추가한다.
+# 주의: 값 없이 `airflow:` 만 남기면(null) Helm 이 values.yaml 의 해당 subtree
+# 전체를 삭제하므로, override 가 없으면 키 자체를 주석으로 둔다.
+# airflow:
+#   executor: "KubernetesExecutor"

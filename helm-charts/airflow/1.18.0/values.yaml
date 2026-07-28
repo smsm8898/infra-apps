@@ -1,0 +1,13 @@
+# airflow base values
+# 실제 설정은 values-dev.yaml / values-prod.yaml 에 upstream 기본값 대비 변경분만 적는다.
+# upstream 기본값 전체는 charts/airflow-1.18.0.tgz 안의 values.yaml 참고 (3,085줄).
+# (회사 구현체는 upstream 기본값 전체를 복사해뒀지만, kube-prometheus-stack 1단계에서
+#  순수 중복임을 검증했으므로 여기서는 처음부터 최소 구성을 쓴다)
+
+environment: ""
+
+# upstream airflow 차트에 전달되는 값의 루트 키.
+# 키를 비워두면(null) 환경별 파일 merge 시 subtree 삭제 사고로 이어질 수 있어
+# 자리표시자를 둔다 (upstream 이 사용하지 않는 관성 값).
+airflow:
+  enabled: true

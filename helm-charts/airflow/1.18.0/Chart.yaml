@@ -1,0 +1,18 @@
+apiVersion: v2
+name: airflow
+description: The official Helm chart to deploy Apache Airflow, a platform to programmatically author, schedule, and monitor workflows
+type: application
+version: 1.18.0
+appVersion: 3.0.2
+keywords:
+  - apache
+  - airflow
+  - workflow
+  - scheduler
+home: https://airflow.apache.org/
+sources:
+  - https://github.com/apache/airflow
+dependencies:
+  - name: airflow
+    version: 1.18.0
+    repository: https://airflow.apache.org/
