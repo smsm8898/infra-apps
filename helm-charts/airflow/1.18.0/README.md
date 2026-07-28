@@ -335,6 +335,41 @@ dev/prod 철학 차이:
 > 릴리스명이 `airflow` 가 아니면 차트가 만드는 ConfigMap 이름과 어긋날 수 있으므로,
 > ArgoCD Application 의 `releaseName` 을 `airflow` 로 고정해야 한다(8단계에서 설정).
 
+### 8단계: ArgoCD app-of-apps 등록
+
+`apps/{dev,prod}/workflow/` 신설 (기존 arc-system/monitoring/reco 와 동일 구조).
+
+```bash
+helm template workflow apps/dev/workflow -f apps/dev/workflow/values.yaml
+helm lint apps/dev/workflow -f apps/dev/workflow/values.yaml
+```
+
+> 검증 결과: Application `airflow` → path `helm-charts/airflow/1.18.0`,
+> destination namespace `airflow`, valueFiles `values.yaml` + `values-{dev,prod}.yaml`,
+> **`releaseName: airflow` 고정**(7단계 ConfigMap 참조 이슈 해소). dev/prod 양쪽 lint 통과.
+
+> kube-prometheus-stack 과 달리 `ServerSideApply`/`ApplyOutOfSyncOnly` 는 불필요하다 —
+> Airflow 차트에는 256KB 를 넘는 거대 CRD 가 없다. 대신 `migrateDatabaseJob`/
+> `createUserJob` 을 끈 것이 ArgoCD sync 와 helm hook 충돌을 예방하는 역할을 한다.
+
+### 최종 검증 (학습 완료 시점)
+
+```bash
+helm lint helm-charts/airflow/1.18.0 -f .../values.yaml -f .../values-dev.yaml   # 통과
+helm lint helm-charts/airflow/1.18.0 -f .../values.yaml -f .../values-prod.yaml  # 통과
+# 렌더: dev 29개 / prod 30개 리소스
+```
+
+배포 전 수동 준비물:
+1. AWS Secrets Manager 시크릿 3개
+   - `<env>/airflow/secrets` — `pg_conn`, `custom_fernet_key`, `api_secret_key`, `jwt_secret`
+   - `github/deploy-key/airflow-dags` — `git_ssh_key`
+   - `<env>/slack/token` — `bot_token`
+2. IRSA role (`<env>-airflow-sa-role`) — S3 로그 버킷 쓰기 권한
+3. 외부 PostgreSQL(RDS) + S3 로그 버킷
+4. Airflow admin 계정 최초 1회 수동 생성 (`defaultUser.enabled: false`)
+5. DB 마이그레이션 최초 1회 수동 실행 (`migrateDatabaseJob.enabled: false`)
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면

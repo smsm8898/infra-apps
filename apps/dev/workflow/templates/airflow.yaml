@@ -1,0 +1,36 @@
+{{- if .Values.applications.airflow.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: airflow
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: {{ $.Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ $.Values.argocd.project }}
+  source:
+    path: helm-charts/airflow/{{ $.Values.applications.airflow.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      # db-cleanup CronJob 이 마운트하는 config 볼륨이 {{ .Release.Name }}-config 를
+      # 참조하므로 릴리스명을 고정한다. 바뀌면 차트가 만드는 airflow-config 와 어긋난다.
+      releaseName: airflow
+      valueFiles:
+      - values.yaml
+      - values-{{ $.Values.environment }}.yaml
+  syncPolicy:
+    automated:
+      {{- toYaml $.Values.argocd.syncPolicy.automated | nindent 6 }}
+    syncOptions:
+      {{- toYaml $.Values.argocd.syncPolicy.syncOptions | nindent 6 }}
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}
