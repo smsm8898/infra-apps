@@ -1,7 +1,264 @@
+# Prod environment values for airflow
+# dev 와의 철학 차이:
+#   - 이미지 태그: latest → 고정 버전 (재현 가능한 배포)
+#   - 리소스: requests == limits (Guaranteed QoS) + 컨트롤플레인 전용 nodegroup
+#   - dbCleanup: 이력 누적 방지 CronJob 활성화
+#   - scheduler 배포 전략: Recreate (surge 로 인한 Pending 교착 회피)
+
 environment: prod
 
-# prod 전용 override 는 airflow 키 아래에 추가한다.
-# 주의: 값 없이 `airflow:` 만 남기면(null) Helm 이 values.yaml 의 해당 subtree
-# 전체를 삭제하므로, override 가 없으면 키 자체를 주석으로 둔다.
-# airflow:
-#   executor: "KubernetesExecutor"
+spark:
+  enabled: true
+
+# 메타DB 이력 보존 — prod 만 활성화 (dev 는 데이터량이 적고 유실 허용)
+dbCleanup:
+  enabled: true
+  retentionDays: 90
+  schedule: "0 18 * * 0"
+  nodeSelector:
+    node-group-name: prod-ng
+  tolerations:
+    - key: node-group-name
+      operator: Equal
+      value: prod-ng
+      effect: NoSchedule
+
+airflow:
+  airflowVersion: "3.0.6"
+
+  # prod 는 태그를 고정 — latest 는 재배포 때마다 다른 이미지가 뜰 수 있다
+  defaultAirflowRepository: "prod위치.dkr.ecr.ap-northeast-2.amazonaws.com/airflow"  # ECR 위치
+  defaultAirflowTag: "v1.0.0"
+
+  images:
+    airflow:
+      pullPolicy: IfNotPresent
+    pod_template:
+      pullPolicy: IfNotPresent    # 태그 고정이므로 Always 불필요
+    useDefaultImageForMigration: false
+
+  # ArgoCD 가 helm hook(pre-install/post-install)을 sync 단계와 충돌시키므로 끈다
+  createUserJob:
+    useHelmHooks: false
+
+  webserver:
+    defaultUser:
+      enabled: false
+
+  rbac:
+    create: true
+    createSCCRoleBinding: false
+
+  apiServer:
+    replicas: 1
+    # requests == limits → Guaranteed QoS. 노드 압박 시 가장 늦게 축출된다.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 2Gi
+      limits:
+        cpu: 1500m
+        memory: 2Gi
+    nodeSelector:
+      node-group-name: prod-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-ng
+        effect: NoSchedule
+
+  scheduler:
+    # ⚠️ 기본 전략 RollingUpdate(maxUnavailable=0)는 신규 파드가 Ready 된 뒤에야 구 파드를
+    #    죽인다. 즉 교체 순간 노드가 구/신 파드 리소스를 동시에 안아야 하고, 무거운
+    #    컴포넌트가 한꺼번에 surge 하면 신규 파드가 영구 Pending 이 된다.
+    #    Recreate 는 구 파드를 먼저 종료하므로 surge 자체가 없다. replicas=1 이라
+    #    RollingUpdate 여도 어차피 무중단이 아니고, 스케줄러가 잠깐 멈춰도 task 는
+    #    큐에 쌓일 뿐이다.
+    strategy:
+      type: Recreate
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+    nodeSelector:
+      node-group-name: prod-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-ng
+        effect: NoSchedule
+
+  statsd:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    nodeSelector:
+      node-group-name: prod-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-ng
+        effect: NoSchedule
+
+  ingress:
+    apiServer:
+      enabled: true
+      ingressClassName: "alb"
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internal
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/backend-protocol: HTTP
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: '443'
+        alb.ingress.kubernetes.io/ssl-certificate:    # certificate 위치
+        alb.ingress.kubernetes.io/group.name:    # 공용 internal ALB group
+        alb.ingress.kubernetes.io/load-balancer-attributes:    # access log 설정
+      path: "/*"
+      pathType: "ImplementationSpecific"
+      hosts:
+        - name: airflow.example.com
+
+  postgresql:
+    enabled: false
+
+  data:
+    metadataSecretName: airflow-metadata-secret
+    brokerUrlSecretName: "disabled"
+
+  fernetKeySecretName: custom-fernet-key
+  apiSecretKeySecretName: custom-api-secret-key
+  jwtSecretName: custom-jwt-secret
+
+  migrateDatabaseJob:
+    enabled: false
+
+  executor: "KubernetesExecutor"
+  allowPodLaunching: true
+
+  redis:
+    enabled: false
+
+  cleanup:
+    enabled: true
+    schedule: "*/15 * * * *"
+    nodeSelector:
+      node-group-name: prod-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-ng
+        effect: NoSchedule
+
+  nodeSelector:
+    node-group-name: prod-ng
+
+  tolerations:
+    - key: node-group-name
+      operator: Equal
+      value: prod-ng
+      effect: NoSchedule
+
+  triggerer:
+    nodeSelector:
+      node-group-name: prod-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-ng
+        effect: NoSchedule
+    livenessProbe:
+      initialDelaySeconds: 30
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 60
+
+  dagProcessor:
+    livenessProbe:
+      initialDelaySeconds: 30
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 60
+
+  multiNamespaceMode: false
+
+  workers:
+    nodeSelector:
+      node-group-name: prod-worker-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: prod-worker-ng
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    serviceAccount:
+      create: false
+      name: airflow-service-account
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::<ACCOUNT_ID>:role/prod-airflow-sa-role"
+        eks.amazonaws.com/audience: "sts.amazonaws.com"
+
+  dags:
+    gitSync:
+      enabled: true
+      repo: git@github.com:smsm8898/airflow-dags.git    # DAG 저장소
+      # ⚠️ git-sync v4 는 ref 로 체크아웃한다 (values-dev.yaml 주석 참고)
+      ref: main
+      branch: main
+      subPath: "dags"
+      sshKeySecret: airflow-ssh-secret
+      period: 10s
+      maxFailures: 3
+      env:
+        - name: GITSYNC_MAX_SYNC_FAILURES
+          value: "3"
+        - name: GITSYNC_SYNC_TIMEOUT
+          value: "300s"
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+
+  volumes:
+    - name: airflow-secrets-store
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: "airflow-secrets-store"
+
+  volumeMounts:
+    - name: airflow-secrets-store
+      mountPath: "/mnt/secrets-store"
+      readOnly: true
+
+  secret:
+    - envName: SLACK_BOT_TOKEN
+      secretName: slack-airflow-token
+      secretKey: token
+
+  config:
+    logging:
+      remote_logging: 'True'
+      remote_base_log_folder: s3://prod-airflow-logs/airflow    # S3 버킷 위치
+      remote_log_conn_id: 'aws_default'
+      colored_console_log: 'False'
+    kubernetes_executor:
+      delete_worker_pods: 'True'
+      # 실패 pod 보존 — KubeContainerOOMKilled 알림 유실 방지 (dev 와 동일 논리)
+      delete_worker_pods_on_failure: 'False'

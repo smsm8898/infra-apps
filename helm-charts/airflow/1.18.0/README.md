@@ -287,6 +287,54 @@ helm template ... --set spark.enabled=false | grep -c "spark-role"   # → 0
 > 따옴표 없이 썼는데 렌더에 붙었다(`serviceAccountName: "airflow-service-account"`).
 > → grep 패턴에는 항상 따옴표를 넣지 않는다.
 
+### 7단계: 메타DB 이력 정리 + prod 미러링
+
+`templates/db-cleanup-cronjob.yaml`(`dbCleanup.enabled` 게이트) 신설 + values-prod.yaml 작성.
+
+```bash
+helm template airflow . -f values.yaml -f values-prod.yaml > /tmp/prod.yaml
+
+# 환경 게이트: dbCleanup 은 prod 만
+grep -c "airflow-db-cleanup" /tmp/dev.yaml    # → 0
+grep -c "airflow-db-cleanup" /tmp/prod.yaml   # → 3
+
+# prod 고유 설정
+awk '/name: airflow-scheduler$/,/template:/' /tmp/prod.yaml | grep -A2 "strategy:"
+```
+
+> 검증 결과 (dev 29개 / prod 30개):
+> - `dbCleanup` 게이트 정상 (dev 0건 / prod 3건 = CronJob + 관련 참조)
+> - db-cleanup CronJob: schedule `0 18 * * 0`, activeDeadlineSeconds 5400,
+>   `serviceAccountName: airflow-service-account`, 고정 태그 이미지,
+>   `--clean-before-timestamp "$(date -u -d '90 days ago' …)"`, tables 8개
+> - scheduler `strategy.type: Recreate` 반영
+> - api-server memory requests == limits (2Gi) → Guaranteed QoS
+> - 기밀 문자열 잔여 0건
+
+dev/prod 철학 차이:
+
+| 항목 | dev | prod |
+|---|---|---|
+| 이미지 태그 | `latest` (+ pod_template `pullPolicy: Always`) | 고정 버전 (재현 가능한 배포) |
+| 리소스 | requests < limits (Burstable) | memory requests == limits (Guaranteed QoS) |
+| dbCleanup | off (데이터량 적음) | on (90일 보존) |
+| scheduler 배포 | RollingUpdate(기본) | **Recreate** |
+| createUserJob | (기본) | `useHelmHooks: false` |
+
+> 배운 것: ① **`airflow db clean` 에서 `dag_version`/`dag` 는 제외해야 한다.**
+> `task_instance.dag_version_id` 가 ON DELETE CASCADE 라, 오래된 created_at 을 가진
+> "최신" 버전(변경이 드문 안정 DAG)을 지우면 cutoff 이후의 최근 task_instance 까지 함께
+> 삭제된다. `dag_run.created_dag_version_id` 는 NO ACTION 이라 FK 위반으로 작업이 중간에
+> 실패한다. ② 무거운 CLI 는 **전용 파드**로 돌린다 — scheduler/api-server 파드 안에서
+> 실행하면 그 컨테이너 cgroup 에 메모리가 잡혀 컴포넌트가 함께 죽는다. ③ `Recreate` 전략:
+> RollingUpdate(maxUnavailable=0)는 교체 순간 구/신 파드를 동시에 안아야 해서, 무거운
+> 컴포넌트가 같이 surge 하면 신규 파드가 영구 Pending 이 된다. replicas=1 이면 어차피
+> 무중단이 아니므로 Recreate 가 안전하다.
+>
+> ⚠️ db-cleanup 이 마운트하는 config 볼륨은 `{{ .Release.Name }}-config` 를 참조한다.
+> 릴리스명이 `airflow` 가 아니면 차트가 만드는 ConfigMap 이름과 어긋날 수 있으므로,
+> ArgoCD Application 의 `releaseName` 을 `airflow` 로 고정해야 한다(8단계에서 설정).
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면

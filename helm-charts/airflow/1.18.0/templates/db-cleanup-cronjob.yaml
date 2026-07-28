@@ -1,0 +1,122 @@
+{{- if .Values.dbCleanup.enabled }}
+{{- /*
+  메타데이터 DB 이력 보존 CronJob.
+
+  왜 필요한가: Airflow 는 task_instance / dag_run / log / xcom 등 실행 이력을 무제한
+  누적한다. 보존정책이 없으면 serialized_dag 가 수만 행까지 불어나고, 그 상태에서
+  `airflow dags list` 같은 CLI 한 번이 전량을 메모리로 끌어와 노드를 고갈시킨다.
+  일회성 삭제로는 다시 쌓이므로 주기 작업으로 고정한다.
+
+  ⚠️ dag_version / dag 를 tables 목록에서 빼는 이유 (중요):
+    `airflow db clean` 은 dag_version 을 created_at 기준으로 지운다. 그런데 오랫동안
+    변경이 없던 안정적인 DAG 는 "최신" 버전의 created_at 이 cutoff 보다 오래됐다.
+    task_instance.dag_version_id 는 ON DELETE CASCADE 이므로 그런 버전을 지우면
+    cutoff 이후의 최근 task_instance 까지 함께 삭제된다.
+    dag_run.created_dag_version_id 는 NO ACTION 이라 FK 위반으로 작업이 중간에 실패한다.
+    → 이력 테이블만 정리하고, dag_version 정리는 참조가 실제로 사라진 것만 따로 다룬다.
+
+  아카이브: --skip-archive 를 주지 않으므로 삭제분은 _airflow_deleted__<table>__<ts>
+  테이블로 복사된 뒤 지워진다(되돌리기 가능). 대신 DB 용량은 즉시 줄지 않으므로
+  아카이브 테이블은 주기적으로 별도 정리해야 한다.
+
+  ⚠️ 전용 파드로 도는 점이 핵심이다. 무거운 airflow CLI 를 scheduler/api-server 등
+  컴포넌트 파드 안에서 실행하면 그 컨테이너 cgroup 에 메모리가 잡혀 해당 컴포넌트가
+  함께 죽는다.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: airflow-db-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    tier: airflow
+    component: airflow-db-cleanup
+    release: {{ .Release.Name }}
+spec:
+  schedule: {{ .Values.dbCleanup.schedule | quote }}
+  # 이전 실행이 길어지면 다음 실행을 건너뛴다 (동시 대량 삭제 방지)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      # 재시도하지 않는다 — 실패 원인(FK 위반 등)은 재시도로 해결되지 않음
+      backoffLimit: 0
+      # 대량 삭제가 길어져도 다음 스케줄과 겹치지 않게 상한을 둔다
+      activeDeadlineSeconds: {{ .Values.dbCleanup.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tier: airflow
+            component: airflow-db-cleanup
+            release: {{ .Release.Name }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: airflow-service-account
+          securityContext:
+            runAsUser: 50000
+            fsGroup: 0
+          nodeSelector:
+            {{- toYaml .Values.dbCleanup.nodeSelector | nindent 12 }}
+          tolerations:
+            {{- toYaml .Values.dbCleanup.tolerations | nindent 12 }}
+          containers:
+            - name: db-cleanup
+              image: "{{ .Values.airflow.defaultAirflowRepository }}:{{ .Values.airflow.defaultAirflowTag }}"
+              imagePullPolicy: IfNotPresent
+              args:
+                - bash
+                - -c
+                - >-
+                  exec airflow db clean
+                  --clean-before-timestamp "$(date -u -d '{{ .Values.dbCleanup.retentionDays }} days ago' +%Y-%m-%dT%H:%M:%S+00:00)"
+                  --tables {{ .Values.dbCleanup.tables }}
+                  --yes --verbose
+              resources:
+                {{- toYaml .Values.dbCleanup.resources | nindent 16 }}
+              env:
+                - name: AIRFLOW_HOME
+                  value: /opt/airflow
+                # Connection/Variable 복호화용 — 컴포넌트와 동일 키를 써야 한다
+                - name: AIRFLOW__CORE__FERNET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.airflow.fernetKeySecretName }}
+                      key: fernet-key
+                # Airflow 버전별로 읽는 키가 달라 세 이름 모두 주입
+                - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.airflow.data.metadataSecretName }}
+                      key: connection
+                - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.airflow.data.metadataSecretName }}
+                      key: connection
+                - name: AIRFLOW_CONN_AIRFLOW_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.airflow.data.metadataSecretName }}
+                      key: connection
+              volumeMounts:
+                - name: config
+                  mountPath: /opt/airflow/airflow.cfg
+                  subPath: airflow.cfg
+                  readOnly: true
+                - name: airflow-secrets-store
+                  mountPath: /mnt/secrets-store
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: {{ .Release.Name }}-config
+            - name: airflow-secrets-store
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: airflow-secrets-store
+{{- end }}
