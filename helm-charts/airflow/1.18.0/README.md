@@ -183,6 +183,49 @@ clone 시도하다 실패한다 (렌더에서 `GITSYNC_REF: "v2-2-stable"` 로 �
 > 복사본 안에 `ref: v2-2-stable` 이 숨어 있는데 환경별 파일에서 `branch` 만 덮어쓰면
 > 문제가 보이지 않는다.
 
+### 4단계: KubernetesExecutor worker (pod template + RBAC + 로그)
+
+```bash
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step4.yaml
+
+# task pod 스펙(pod_template_file.yaml)에 스케줄링/리소스가 반영됐는지
+grep -n "pod_template_file.yaml:" /tmp/step4.yaml   # ConfigMap 안의 위치 확인
+grep -A2 "^      nodeSelector:" /tmp/step4.yaml
+
+# airflow.cfg 로 들어간 executor/logging 설정
+grep -E "delete_worker_pods|remote_logging|remote_base_log_folder" /tmp/step4.yaml
+
+# RBAC 범위 (multiNamespaceMode 효과)
+grep -c "^kind: ClusterRole" /tmp/step4.yaml   # → 0 (Role/RoleBinding 만)
+```
+
+> 검증 결과 (리소스 28개 유지 — pod template 은 ConfigMap 내용, config 는 airflow.cfg 변경):
+> - `pod_template_file.yaml` 에 `nodeSelector: node-group-name: dev-worker-ng`,
+>   toleration, worker 리소스(requests 100m/256Mi, limits 1000m/2Gi) 반영
+> - `[kubernetes_executor] delete_worker_pods = True`,
+>   `delete_worker_pods_on_failure = False` 반영
+> - `[logging] remote_logging = True`, `remote_base_log_folder = s3://…` 반영
+> - `airflow-pod-launcher-role`(Role, namespace 한정)이 pods create/delete/watch 권한을
+>   scheduler·worker ServiceAccount 에 부여. `multiNamespaceMode: false` 이므로
+>   ClusterRole 은 생성되지 않음(0건)
+
+**함정: `podTemplateFile:` 은 upstream 에 없는 키다.**
+회사 구현은 `podTemplateFile.nodeSelector` 로 task pod 스케줄링을 설정했지만 이 키는
+차트가 읽지 않는다(무해하지만 무의미). 실제로 task pod 스펙은
+`files/pod-template-file.kubernetes-helm-yaml` 이 `workers.nodeSelector`
+(없으면 최상위 `nodeSelector`)를 읽어 만든다. 전체 스펙을 직접 쓰려면 문자열 키
+`podTemplate:` 을 써야 한다. 회사는 `workers.nodeSelector` 도 함께 설정해뒀기 때문에
+결과적으로 정상 동작 중.
+
+> 설계 연결점: `delete_worker_pods_on_failure: 'False'` 는 kube-prometheus-stack 6단계의
+> `KubeContainerOOMKilled` 알림과 짝이다. 실패 pod 을 즉시 지우면 OOMKilled 상태가
+> kube-state-metrics 스크랩 주기(30s) 안에 관측되지 않아 알림이 유실된다. 잔존 pod 정리는
+> cleanup CronJob(15분)이 담당하므로 무한히 쌓이지도 않는다.
+>
+> task pod 은 종료되면 사라지므로 로그를 S3 로 내보낸다(`remote_logging`). PVC 공유
+> 방식보다 RWX 스토리지가 불필요하고 보존 기간을 S3 라이프사이클로 관리할 수 있다.
+> AWS 자격증명은 IRSA 로 해결 예정(7단계).
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면
