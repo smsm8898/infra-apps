@@ -6,6 +6,11 @@
 
 environment: ""
 
+# Spark on Kubernetes 사용 여부 (templates/spark-rbac.yaml 게이트).
+# Spark job 을 안 쓰는 환경에서는 false 로 두어 불필요한 권한을 만들지 않는다.
+spark:
+  enabled: true
+
 # upstream airflow 차트에 전달되는 값의 루트 키.
 # 키를 비워두면(null) 환경별 파일 merge 시 subtree 삭제 사고로 이어질 수 있어
 # 자리표시자를 둔다 (upstream 이 사용하지 않는 관성 값).

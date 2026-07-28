@@ -1,0 +1,61 @@
+{{- /*
+  Spark on Kubernetes 용 RBAC (spark.enabled 게이트).
+
+  SparkKubernetesOperator / SparkSubmitOperator 로 Spark job 을 띄우면
+  task pod(= spark driver)이 다시 executor pod 들을 생성한다.
+  즉 driver 가 K8s API 로 pod/service/configmap 을 만들고 지울 권한이 필요하다.
+
+  KubernetesExecutor 의 pod-launcher-role 과는 별개:
+    - pod-launcher-role : scheduler 가 task pod 을 만드는 권한
+    - spark-role        : task pod(driver) 이 executor pod 을 만드는 권한
+*/}}
+{{- if .Values.spark.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-spark-role
+  namespace: {{ .Release.Namespace }}
+rules:
+  # driver 가 executor pod 을 생성/삭제/감시
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "watch", "list", "create", "delete", "patch", "update", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["get", "patch", "update"]
+  # driver 가 executor 와 통신하기 위한 headless service
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete", "patch", "update", "deletecollection"]
+  # spark conf 전달용 ConfigMap
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "delete", "patch", "update", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "create"]
+  # shuffle/spill 용 임시 볼륨
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-spark-rolebinding
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: airflow-service-account
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: airflow-spark-role
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

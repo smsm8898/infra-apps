@@ -180,6 +180,14 @@ airflow:
       limits:
         cpu: 1000m
         memory: 2Gi
+    # 차트 자동생성 SA 대신 공용 SA(templates/service-account.yaml) 사용.
+    # IRSA role 로 S3 로그 업로드 권한을 얻고, spark-rbac 의 RoleBinding 대상도 이 SA.
+    serviceAccount:
+      create: false
+      name: airflow-service-account
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::<ACCOUNT_ID>:role/dev-airflow-sa-role"
+        eks.amazonaws.com/audience: "sts.amazonaws.com"
 
   # DAG 배포: git-sync 사이드카가 DAG 저장소를 주기적으로 pull.
   # 이미지에 DAG 를 굽지 않으므로 DAG 수정 시 재배포·이미지 빌드가 불필요하다.

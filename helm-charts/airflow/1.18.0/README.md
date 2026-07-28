@@ -252,6 +252,41 @@ awk '/^kind: Ingress/,/^---/' /tmp/step5.yaml    # 백엔드 서비스/포트/ho
 > api-server 로 개편됐지만 values 키 구조는 과거 이름을 유지. ③ 기본 admin 자동 생성을
 > 끄면 ArgoCD sync 마다 Job 이 재실행되는 것도 함께 사라진다.
 
+### 6단계: 공용 ServiceAccount(IRSA) + Spark RBAC
+
+커스텀 템플릿 2개 추가 — `service-account.yaml`, `spark-rbac.yaml`(`spark.enabled` 게이트).
+
+```bash
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step6.yaml
+diff <(grep -E "^  name: " /tmp/step5.yaml|sort -u) <(grep -E "^  name: " /tmp/step6.yaml|sort -u)
+
+# task pod 이 실제로 공용 SA 를 쓰는지 (IRSA·spark RBAC 의 전제)
+grep "serviceAccountName" /tmp/step6.yaml | sort | uniq -c
+
+# 게이트 검증
+helm template ... --set spark.enabled=false | grep -c "spark-role"   # → 0
+```
+
+> 검증 결과 (27개 → 29개):
+> - **사라짐**: `airflow-worker`(차트 자동생성 SA) — `workers.serviceAccount.create: false`
+> - **생김**: `airflow-service-account`(IRSA annotation 부착),
+>   `airflow-spark-role` + `airflow-spark-rolebinding`
+> - `pod_template_file.yaml` 의 `serviceAccountName: airflow-service-account` 확인 →
+>   task pod 이 IRSA role 로 S3 로그 업로드, spark RBAC 도 동일 SA 에 적용
+> - `pod-launcher-rolebinding` subject 가 `airflow-scheduler` + `airflow-service-account`
+>   두 개로 자동 갱신됨 (차트가 `workers.serviceAccount.name` 을 참조)
+> - `spark.enabled=false` → spark RBAC 0건
+
+> 배운 것: 두 RBAC 은 계층이 다르다 —
+> `pod-launcher-role` 은 **scheduler 가 task pod 을 만드는** 권한,
+> `spark-role` 은 **task pod(= spark driver)이 executor pod 을 만드는** 권한.
+> Spark job 은 pod 이 pod 을 만드는 2단 구조라 별도 Role 이 필요하다.
+>
+> 측정 함정 4: 렌더의 따옴표 유무는 **차트 템플릿이 `| quote` 를 쓰는지에 달려 예측할 수
+> 없다**. 2단계에서는 values 에 따옴표를 썼는데 렌더에서 벗겨졌고, 여기서는 values 에
+> 따옴표 없이 썼는데 렌더에 붙었다(`serviceAccountName: "airflow-service-account"`).
+> → grep 패턴에는 항상 따옴표를 넣지 않는다.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면
