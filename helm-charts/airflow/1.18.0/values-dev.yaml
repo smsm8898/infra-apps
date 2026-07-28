@@ -21,6 +21,50 @@ airflow:
     # migration Job 도 커스텀 이미지 사용 (upstream 기본 이미지엔 provider 없음)
     useDefaultImageForMigration: false
 
+  # Airflow 3.x 의 웹 UI/REST API 컴포넌트 (2.x 의 webserver 후속)
+  apiServer:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+  # `webserver` 섹션은 3.x 에서도 남아 있고, create-user Job 이 이 값을 참조한다.
+  # 기본 admin 계정 자동 생성을 끔 — 계정은 최초 1회 수동 생성하고 이후 관리는
+  # 인증 백엔드(FabAuthManager)에 맡긴다. (sync 마다 Job 이 재실행되는 것도 방지)
+  webserver:
+    defaultUser:
+      enabled: false
+
+  # 차트가 Role/RoleBinding 을 만들도록 유지.
+  # createSCCRoleBinding 은 OpenShift SecurityContextConstraints 용이라 EKS 에선 불필요.
+  rbac:
+    create: true
+    createSCCRoleBinding: false
+
+  ingress:
+    # ⚠️ Airflow 3.x 는 `ingress.apiServer` 를 쓴다 (`ingress.web` 은 2.x webserver 용).
+    #    최상위 `ingress.enabled` 는 deprecated.
+    apiServer:
+      enabled: true
+      ingressClassName: "alb"
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internal
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/backend-protocol: HTTP
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: '443'
+        alb.ingress.kubernetes.io/ssl-certificate:    # certificate 위치
+        alb.ingress.kubernetes.io/group.name:    # 공용 internal ALB group
+        alb.ingress.kubernetes.io/load-balancer-attributes:    # access log 설정
+      path: "/*"
+      pathType: "ImplementationSpecific"
+      hosts:
+        - name: airflow.dev.example.com
+
   # 내장 postgresql(개발 편의용 StatefulSet) 대신 외부 관리형 DB(RDS) 사용.
   # 메타데이터 DB 는 DAG 상태·이력의 원본이라 pod 로컬 스토리지에 두지 않는다.
   postgresql:

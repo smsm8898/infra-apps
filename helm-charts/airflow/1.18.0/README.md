@@ -226,6 +226,32 @@ grep -c "^kind: ClusterRole" /tmp/step4.yaml   # → 0 (Role/RoleBinding 만)
 > 방식보다 RWX 스토리지가 불필요하고 보존 기간을 S3 라이프사이클로 관리할 수 있다.
 > AWS 자격증명은 IRSA 로 해결 예정(7단계).
 
+### 5단계: api-server + Ingress
+
+```bash
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step5.yaml
+diff <(grep -E "^  name: " /tmp/step4.yaml|sort -u) <(grep -E "^  name: " /tmp/step5.yaml|sort -u)
+
+awk '/^kind: Ingress/,/^---/' /tmp/step5.yaml    # 백엔드 서비스/포트/host 확인
+```
+
+> 검증 결과 (28개 → 27개):
+> - **사라짐**: `airflow-create-user-job`(Job + SA) — `webserver.defaultUser.enabled: false`
+> - **생김**: `airflow-ingress` — 백엔드가 `airflow-api-server` 서비스의 `api-server` 포트,
+>   host `airflow.dev.example.com`
+> - api-server 리소스(requests 100m/512Mi, limits 500m/1Gi) 반영
+> - Role 3개 / RoleBinding 3개, SCC RoleBinding 0건(`createSCCRoleBinding: false`)
+> - null placeholder annotation(ssl-certificate/group.name/load-balancer-attributes) 0건 —
+>   **map 값이므로 조용히 탈락**(값이 있는 ssl-redirect 는 1건 유지). 1단계의
+>   `defaultAirflowRepository` 와 대비되는 지점: 문자열 보간 값은 렌더를 깨뜨리지만
+>   annotation map 은 안전하다.
+
+> 배운 것: ① Airflow 3.x 는 Ingress 키가 **`ingress.apiServer`** 다 (`ingress.web` 은 2.x
+> webserver 용, 최상위 `ingress.enabled` 는 deprecated). ② `webserver:` 섹션은 3.x 에서도
+> 남아 있고 **create-user Job 이 `webserver.defaultUser` 를 참조**한다 — 컴포넌트는
+> api-server 로 개편됐지만 values 키 구조는 과거 이름을 유지. ③ 기본 admin 자동 생성을
+> 끄면 ArgoCD sync 마다 Job 이 재실행되는 것도 함께 사라진다.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면
