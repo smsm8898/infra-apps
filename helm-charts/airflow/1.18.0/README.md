@@ -147,6 +147,42 @@ AWS Secrets Manager (<env>/airflow/secrets, JSON)
 > `secretProviderClass: "airflow-secrets-store"` 로 썼어도 렌더에는 따옴표가 없어
 > grep 패턴에 따옴표를 넣으면 0건으로 오측정된다.
 
+### 3단계: DAG 배포 (gitSync)
+
+```bash
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step3.yaml
+
+# git-sync 사이드카가 어느 워크로드에 붙었는지
+awk '/^kind: (Deployment|StatefulSet)$/{k=$2} /^  name: /{n=$2} \
+  /- name: git-sync/{print k": "n}' /tmp/step3.yaml | sort -u
+
+# 실제 체크아웃 대상 확인 (여기서 버그를 잡았다)
+grep -E "GITSYNC_REF|GIT_SYNC_BRANCH|GITSYNC_REPO" -A1 /tmp/step3.yaml | grep value | sort -u
+grep "dags_folder" /tmp/step3.yaml
+```
+
+> 검증 결과 (리소스 28개 유지 — 사이드카는 기존 워크로드에 추가되므로 리소스 수 불변):
+> - git-sync 사이드카는 **dag-processor**(DAG 파싱)와 **triggerer**(deferrable operator
+>   코드 로드)에 붙는다. Airflow 3.x 의 scheduler 는 DAG 파일을 직접 읽지 않으므로 제외 —
+>   2.x 와 다른 지점.
+> - `dags_folder = /opt/airflow/dags/repo/dags` — 마운트 경로 + `GITSYNC_LINK`(repo)
+>   + `subPath`(dags) 조합으로 결정
+> - deploy key 는 `/etc/git-secret/ssh` 에 `subPath: gitSshKey` 로 마운트
+
+**🐛 버그 발견 — `branch` 만 설정하면 엉뚱한 브랜치를 체크아웃한다**
+
+차트가 쓰는 git-sync 는 **v4.3.0** 이고, v4 는 `GITSYNC_REF` 환경변수로 체크아웃한다.
+차트 템플릿은 `GITSYNC_REF`(= values 의 `ref`)와 `GIT_SYNC_BRANCH`(= `branch`, v3 레거시)를
+**둘 다 내보내지만 v4 컨테이너는 REF 만 읽는다**. 따라서 `branch: main` 만 설정하면
+upstream 기본값 `ref: v2-2-stable` 이 그대로 적용되어 존재하지 않는 브랜치를 계속
+clone 시도하다 실패한다 (렌더에서 `GITSYNC_REF: "v2-2-stable"` 로 직접 확인).
+
+> 회사 구현도 dev(`branch: develop`)/prod(`branch: main`) 모두 `ref` 를 설정하지 않아
+> 같은 상태다. 개인 repo 는 `ref` + `branch` 를 함께 지정해 해소했다.
+> — 이것이 "upstream 기본값을 values.yaml 에 복사해두면 위험한" 구체적 사례:
+> 복사본 안에 `ref: v2-2-stable` 이 숨어 있는데 환경별 파일에서 `branch` 만 덮어쓰면
+> 문제가 보이지 않는다.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면
