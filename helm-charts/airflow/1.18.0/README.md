@@ -103,6 +103,50 @@ diff <(grep -E "^  name: " /tmp/step0.yaml | sort -u) \
 kube-prometheus-stack 4단계에서 확인한 "null annotation 은 조용히 탈락" 은
 map 값에만 해당하고, 문자열 보간(printf)에 쓰이는 값은 렌더를 깨뜨린다.
 
+### 2단계: 메타데이터 DB + 시크릿 부트스트랩
+
+`templates/secrets-store.yaml`(SecretProviderClass) 신설 + values 에 외부 DB/시크릿 연결.
+
+```bash
+helm template airflow . -f values.yaml -f values-dev.yaml > /tmp/step2.yaml
+diff <(grep -E "^  name: " /tmp/step1.yaml|sort -u) <(grep -E "^  name: " /tmp/step2.yaml|sort -u)
+
+# CSI 볼륨이 실제로 어느 워크로드에 마운트됐는지 (Secret 동기화 발동 조건)
+awk '/^kind: (Deployment|StatefulSet|CronJob|Job)$/{k=$2} /^  name: /{n=$2} \
+  /secretProviderClass: airflow-secrets-store/{print k": "n}' /tmp/step2.yaml | sort -u
+```
+
+> 검증 결과 (37개 → 28개):
+> - **사라짐**: `airflow-postgresql`(+`-hl` Service, StatefulSet) — 내장 DB 제거,
+>   `airflow-metadata`/`airflow-fernet-key`/`airflow-api-secret-key`/`airflow-jwt-secret`
+>   (차트 자동생성 Secret 4종) — 외부 주입으로 대체,
+>   `airflow-broker-url` — brokerUrlSecretName 더미 트릭,
+>   `airflow-run-airflow-migrations` — migrateDatabaseJob off
+> - **생김**: `airflow-secrets-store`(SecretProviderClass)
+> - CSI 볼륨은 6개 워크로드(scheduler/api-server/dag-processor/triggerer/cleanup/create-user)에
+>   마운트, `SLACK_BOT_TOKEN` env 는 10개 컨테이너에 주입
+
+시크릿 전달 경로 (한 고리라도 빠지면 pod 이 기동 실패):
+```
+AWS Secrets Manager (<env>/airflow/secrets, JSON)
+  → SecretProviderClass.parameters.objects (jmesPath 로 필드 추출 → objectAlias)
+  → pod 이 CSI 볼륨 마운트 (values 의 airflow.volumes/volumeMounts) ← 이때 동기화 발동
+  → secretObjects 가 k8s Secret 생성 (airflow-metadata-secret, custom-fernet-key, …)
+  → values 의 data.metadataSecretName / fernetKeySecretName 등이 참조
+```
+
+> 배운 것: ① `data.brokerUrlSecretName: "disabled"` 는 실제 secret 을 가리키는 게 아니라
+> **차트의 자동생성을 막는 더미 이름** — KubernetesExecutor 에 불필요한 리소스를 없애는 트릭.
+> ② `fernetKey` 는 install 시점 값이 고정 — 이후 변경하면 기존 암호화된 Connection/Variable
+> 복호화 불가. ③ Airflow 3.x 는 `apiSecretKeySecretName`(구 webserverSecretKey 후속)과
+> `jwtSecretName`(컴포넌트 간 인증) 두 키를 쓴다. **회사 구현은 `custom-jwt-secret` 을 CSI 로
+> 만들면서 `jwtSecretName` 으로 연결하지 않아** 차트 자동생성분이 쓰이고 있었다 — 개인 repo 는
+> 연결해서 재배포 시 값이 바뀌지 않게 함.
+>
+> 측정 함정 3: 렌더된 YAML 은 정규화되어 **따옴표가 벗겨진다** — values 에
+> `secretProviderClass: "airflow-secrets-store"` 로 썼어도 렌더에는 따옴표가 없어
+> grep 패턴에 따옴표를 넣으면 0건으로 오측정된다.
+
 ## 주의사항
 
 - 환경별 values 파일에서 override 없이 `airflow:` 키만 값 없이(null) 남기면
