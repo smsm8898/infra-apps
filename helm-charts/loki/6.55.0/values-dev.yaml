@@ -3,6 +3,23 @@
 # 스토리지 전략: emptyDir. dev 로그는 유실을 허용하고, PVC 를 쓰지 않아 노드 교체 시
 # 볼륨이 특정 AZ/노드에 묶여 Pending 되는 churn 을 피한다. 보존은 base 의 168h 유지.
 loki:
+  loki:
+    # 로그 기반 알림. SingleBinary(-target=all) 안에서 ruler 가 함께 구동되므로
+    # 별도 ruler 워크로드(replicas)가 필요 없다. 평가 결과는 kps 가 띄운
+    # Alertmanager 로 push 해서 기존 Slack 라우팅을 그대로 재사용한다.
+    rulerConfig:
+      alertmanager_url: http://monitoring-alertmanager.monitoring.svc.cluster.local:9093
+      enable_alertmanager_v2: true
+      enable_api: true
+      # 룰 저장소는 local. 사이드카가 ConfigMap 을 파일로 떨궈주는 디렉토리를 읽는다.
+      storage:
+        type: local
+        local:
+          directory: /rules
+      rule_path: /tmp/loki/rules-temp
+      wal:
+        dir: /var/loki/ruler-wal
+
   singleBinary:
     replicas: 1
 
@@ -38,3 +55,96 @@ loki:
         operator: Equal
         value: dev-ng
         effect: NoSchedule
+
+  # rules 사이드카(k8s-sidecar)는 기본값으로 이미 켜져 있고 loki_rule 라벨 ConfigMap 을
+  # 감시한다. 기본 폴더는 /rules 인데, ruler 의 local storage 는 /rules/<tenant>/ 구조를
+  # 기대한다. auth_enabled=false 의 테넌트는 fake 이므로 폴더를 /rules/fake 로 옮긴다.
+  #
+  # 차트의 네이티브 경로인 ruler.directories 는 전용 ruler StatefulSet 전용이라
+  # SingleBinary 모드에선 ConfigMap 조차 만들어지지 않는다(렌더로 확인). 사이드카가 유일한 길.
+  sidecar:
+    rules:
+      folder: /rules/fake
+
+  # LogQL 알림 룰. 사이드카 픽업 → ruler 평가 → Alertmanager → Slack.
+  #
+  # ⚠️ extraObjects 의 각 항목은 차트가 tpl 로 한 번 렌더한다. 그래서 룰 안의
+  #    {{ $labels }} / {{ $value }} (Alertmanager 가 평가할 표현식)를 그대로 두면
+  #    Helm 이 자기 변수로 해석하려다 `undefined variable "$labels"` 로 렌더가 죽는다.
+  #    backtick 으로 감싸 문자열 리터럴로 통과시킨다.
+  extraObjects:
+    - |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: loki-ruler-rules
+        labels:
+          loki_rule: ""
+      data:
+        log-alerts.yaml: |
+          groups:
+            # reco 는 구조화(JSON) 로그 → | json 으로 필드를 뽑아 조건을 건다.
+            - name: reco-api.logs
+              rules:
+                - alert: LogAppExceptionRaised
+                  expr: 'sum by (namespace) (count_over_time({namespace="reco"} | json | message="request failed" [5m])) > 0'
+                  for: 1m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "[{{`{{ $labels.namespace }}`}}] 앱 예외 발생 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "uncaught exception (message=request failed). Loki 에서 해당 namespace 확인."
+                - alert: LogHigh5xxRate
+                  expr: 'sum by (namespace) (count_over_time({namespace="reco"} | json | http_response_status_code>=500 [5m])) > 10'
+                  for: 5m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "[{{`{{ $labels.namespace }}`}}] 5xx 급증 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "http_response_status_code>=500 누적."
+                - alert: LogErrorRateSpike
+                  expr: 'sum by (namespace) (count_over_time({namespace="reco"} | json | level="error" [5m])) > 20'
+                  for: 5m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "[{{`{{ $labels.namespace }}`}}] 에러 로그 급증 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "level=error 누적 (logger.error 포함)."
+                - alert: LogVolumeSpike
+                  expr: 'sum by (namespace) (count_over_time({namespace="reco"} [5m])) > 5000'
+                  for: 5m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "[{{`{{ $labels.namespace }}`}}] 로그 볼륨 폭증 — 최근 5m {{`{{ $value }}`}}라인"
+                    description: "로그량 급증 (비용/이상 신호)."
+            # airflow 는 텍스트 로그 → | json 이 안 먹으므로 |= / |~ 라인 매칭으로 잡는다.
+            - name: airflow.logs
+              rules:
+                - alert: LogAirflowTaskFailed
+                  expr: 'sum (count_over_time({namespace="airflow"} |= "Marking task as FAILED" [5m])) > 0'
+                  for: 0m
+                  labels:
+                    severity: warning
+                    namespace: airflow
+                  annotations:
+                    summary: "[airflow] task 실패 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "Marking task as FAILED 로그 발생. Airflow UI 에서 해당 DAG run 확인."
+                - alert: LogAirflowDbError
+                  expr: 'sum (count_over_time({namespace="airflow"} |~ "(?i)(OperationalError|could not connect to server|too many connections)" [5m])) > 0'
+                  for: 0m
+                  labels:
+                    severity: critical
+                    namespace: airflow
+                  annotations:
+                    summary: "[airflow] 메타DB 연결 오류 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "scheduler/api-server 가 메타DB 에 붙지 못함. RDS 상태와 커넥션 수 확인."
+                - alert: LogAirflowGitSyncFailed
+                  expr: 'sum (count_over_time({namespace="airflow", container="git-sync"} |~ "(?i)error" [5m])) > 0'
+                  for: 5m
+                  labels:
+                    severity: warning
+                    namespace: airflow
+                  annotations:
+                    summary: "[airflow] git-sync 실패 지속 — 최근 5m {{`{{ $value }}`}}건"
+                    description: "DAG 동기화가 멈추면 배포한 DAG 가 반영되지 않는다. deploy key 와 ref/branch 설정 확인."
