@@ -185,6 +185,15 @@ kube-prometheus-stack:
         provider:
           foldersFromFilesStructure: true
 
+    # Loki datasource - 로그 조회용 (dev 와 동일. Loki Service 주소가 환경 무관하게 같다).
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.monitoring.svc.cluster.local:3100
+        jsonData:
+          maxLines: 1000
+
     dashboardProviders:
       dashboardproviders.yaml:
         apiVersion: 1

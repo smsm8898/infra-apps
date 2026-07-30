@@ -148,6 +148,20 @@ kube-prometheus-stack:
         provider:
           foldersFromFilesStructure: true
 
+    # Loki datasource - 로그 조회용. Prometheus/Alertmanager datasource 는 kps 차트가
+    # 자동 등록하지만 Loki 는 별도 차트(helm-charts/loki)라 여기서 명시적으로 연결한다.
+    # 알림(ruler)은 Loki 안에서 평가되므로 이 datasource 와 무관하게 동작한다 -
+    # 여기 연결은 사람이 로그를 들여다보기 위한 것.
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        # Alloy 가 push 하는 것과 같은 대상(monitoring namespace 의 SingleBinary Service).
+        url: http://loki.monitoring.svc.cluster.local:3100
+        jsonData:
+          # 한 화면에 그릴 로그 라인 상한. 넓은 시간범위 조회로 브라우저가 죽는 것을 막는다.
+          maxLines: 1000
+
     # sidecar 가 내려준 JSON 파일을 읽을 file provider
     dashboardProviders:
       dashboardproviders.yaml:
