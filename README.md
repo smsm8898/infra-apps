@@ -11,12 +11,12 @@ infra-apps/
 ├── apps/                           # ArgoCD App-of-Apps 배포 설정
 │   ├── dev/                        # 개발 환경
 │   │   ├── arc-system/             # GitHub Actions Runner Controller
-│   │   ├── monitoring/             # kube-prometheus-stack
+│   │   ├── monitoring/             # kube-prometheus-stack + Loki + Alloy
 │   │   ├── reco/                   # 추천 시스템
 │   │   └── workflow/               # Airflow
 │   └── prod/                       # 운영 환경
 │       ├── arc-system/             # GitHub Actions Runner Controller
-│       ├── monitoring/             # kube-prometheus-stack
+│       ├── monitoring/             # kube-prometheus-stack + Loki + Alloy
 │       ├── reco/                   # 추천 시스템
 │       └── workflow/               # Airflow
 ├── helm-charts/                    # Helm 차트 라이브러리
@@ -24,7 +24,9 @@ infra-apps/
 │   │   ├── actions-runner-controller/  # ARC 컨트롤러 (upstream 차트 wrapping)
 │   │   └── actions-runner/         # RunnerDeployment + HorizontalRunnerAutoscaler
 │   ├── airflow/                    # Airflow (upstream 차트 wrapping + KubernetesExecutor/gitSync)
+│   ├── alloy/                      # 로그 수집 DaemonSet (upstream 차트 wrapping + River 설정)
 │   ├── kube-prometheus-stack/      # 모니터링 스택 (upstream 차트 wrapping + 커스텀 대시보드/알림)
+│   ├── loki/                       # 로그 집계 (upstream 차트 wrapping + SingleBinary/ruler)
 │   └── reco-api/                   # 추천 시스템
 └── docker/                         # Docker 이미지 빌드 (각 하위 디렉토리 = 1 이미지 빌드 컨텍스트)
     └── actions-runner/             # Self-hosted GitHub Actions Runner
@@ -57,6 +59,15 @@ helm lint helm-charts/<chart>/<version> \
   -f helm-charts/<chart>/<version>/values.yaml \
   -f helm-charts/<chart>/<version>/values-<env>.yaml
 ```
+
+**검증 시 주의 2가지** (helm 4.1.1 기준):
+
+- `helm lint` 는 게이트가 아니다. upstream 차트를 wrapping 한 차트에서 subchart 의
+  `fail`/`required` 오류는 `level=WARN` 로그로만 나오고 exit 0 이다. `templates/` 가 없는
+  wrapper(loki, alloy)는 subchart 를 렌더조차 하지 않는다. **판정은 `helm template` 으로 한다.**
+- CR(ServiceMonitor, PodMonitor 등)을 만드는 차트는 `Capabilities.APIVersions` 로 게이트되어
+  offline 렌더에서 **조용히 탈락**한다. 해당 CR 을 확인할 때는 플래그를 붙인다:
+  `--api-versions monitoring.coreos.com/v1/ServiceMonitor`
 
 ### ArgoCD App-of-Apps 렌더링
 

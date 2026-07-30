@@ -1,0 +1,48 @@
+{{- if .Values.applications.loki.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: {{ $.Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ $.Values.argocd.project }}
+  source:
+    path: helm-charts/loki/{{ $.Values.applications.loki.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      # 릴리스명 고정 필수. 차트 fullname 이 릴리스명에서 나오므로 Service 명이 loki 가
+      # 되는데, Alloy 의 loki.write 와 Grafana datasource 가 그 주소를 문자열로 참조한다.
+      # 릴리스명이 바뀌면 Service 명이 바뀌어 로그 push 와 조회가 동시에 끊긴다.
+      releaseName: loki
+      valueFiles:
+      - values.yaml
+      - values-{{ $.Values.environment }}.yaml
+  # StatefulSet 의 volumeClaimTemplates 는 API 서버가 volumeMode 등을 defaulting 하고
+  # immutable 이라 영구 OutOfSync 를 만든다 (PVC 를 쓰는 prod 만 해당, dev emptyDir 엔 무해).
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      name: loki
+      jsonPointers:
+        - /spec/volumeClaimTemplates
+  syncPolicy:
+    automated:
+      {{- toYaml $.Values.argocd.syncPolicy.automated | nindent 6 }}
+    syncOptions:
+      {{- toYaml $.Values.argocd.syncPolicy.syncOptions | nindent 6 }}
+      # 차트가 ServiceMonitor(CR)를 만든다. 신규 클러스터에서 kube-prometheus-stack 이
+      # CRD 를 심기 전에 이 앱이 먼저 sync 되면 dry-run 이 실패하므로 건너뛴다.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}

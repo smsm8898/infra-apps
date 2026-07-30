@@ -16,3 +16,10 @@ applications:
   kubePrometheusStack:
     enabled: true
     version: "67.0.0"
+  # 로그 파이프라인: alloy(수집) -> loki(저장/알림) -> grafana(조회, kps 의 datasource)
+  loki:
+    enabled: true
+    version: "6.55.0"
+  alloy:
+    enabled: true
+    version: "1.10.0"

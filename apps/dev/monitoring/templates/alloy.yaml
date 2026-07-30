@@ -1,0 +1,34 @@
+{{- if .Values.applications.alloy.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alloy
+  namespace: {{ $.Values.argocd.namespace }}
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: {{ $.Values.applications.namespace }}
+    server: https://kubernetes.default.svc
+  project: {{ $.Values.argocd.project }}
+  source:
+    path: helm-charts/alloy/{{ $.Values.applications.alloy.version }}
+    repoURL: git@github.com:smsm8898/infra-apps
+    targetRevision: HEAD
+    helm:
+      releaseName: alloy
+      valueFiles:
+      - values.yaml
+      - values-{{ $.Values.environment }}.yaml
+  syncPolicy:
+    automated:
+      {{- toYaml $.Values.argocd.syncPolicy.automated | nindent 6 }}
+    syncOptions:
+      {{- toYaml $.Values.argocd.syncPolicy.syncOptions | nindent 6 }}
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}
