@@ -1,1 +1,7 @@
-# Alloy prod — base values.yaml 대비 변경분만 (0단계에서는 비어있음).
+# Alloy prod — 수집 설정은 base values.yaml 을 그대로 공유한다(dev 와 동일).
+# 노드 스케줄링도 분기하지 않는다: DaemonSet + tolerations Exists 로 전 노드를 덮는 것이
+# 목적이므로 nodeSelector 를 걸면 그 노드들의 로그를 놓친다.
+alloy:
+  alloy:
+    clustering:
+      enabled: false
