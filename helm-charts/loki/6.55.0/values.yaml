@@ -1,0 +1,6 @@
+# Loki wrapper chart — 환경 공통 base values.
+# 0단계(뼈대)에서는 의도적으로 비워 upstream 기본값 렌더를 baseline 으로 측정한다.
+#
+# ⚠️ `loki:` 키만 두고 값을 비우면(null) Helm coalesce 가 subchart 기본값 subtree 를
+#    통째로 삭제한다 (kube-prometheus-stack 1단계에서 확인한 함정). 그래서 빈 매핑조차
+#    두지 않고 주석만 남긴다.
