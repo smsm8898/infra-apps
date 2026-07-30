@@ -1,1 +1,40 @@
-# Loki dev — base values.yaml 대비 변경분만 (0단계에서는 비어있음).
+# Loki dev — base values.yaml 대비 변경분만.
+#
+# 스토리지 전략: emptyDir. dev 로그는 유실을 허용하고, PVC 를 쓰지 않아 노드 교체 시
+# 볼륨이 특정 AZ/노드에 묶여 Pending 되는 churn 을 피한다. 보존은 base 의 168h 유지.
+loki:
+  singleBinary:
+    replicas: 1
+
+    # ⚠️ persistence off 는 PVC(volumeClaimTemplates)만 지우는 게 아니라 /var/loki
+    #    볼륨마운트까지 통째로 없앤다 (차트가 둘을 같은 조건으로 게이트).
+    #    그대로 두면 Loki 가 path_prefix=/var/loki 를 컨테이너 루트 fs 에 쓰게 되어
+    #    상한 없이 노드 ephemeral-storage 를 잡아먹는다.
+    persistence:
+      enabled: false
+
+    # 그래서 없어진 데이터 볼륨을 emptyDir 로 직접 공급한다(이름은 storage 유지).
+    # sizeLimit 으로 상한을 걸어 노드 디스크 고갈을 막는다.
+    extraVolumes:
+      - name: storage
+        emptyDir:
+          sizeLimit: 10Gi
+    extraVolumeMounts:
+      - name: storage
+        mountPath: /var/loki
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+    nodeSelector:
+      node-group-name: dev-ng
+    tolerations:
+      - key: node-group-name
+        operator: Equal
+        value: dev-ng
+        effect: NoSchedule

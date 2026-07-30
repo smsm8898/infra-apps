@@ -106,3 +106,20 @@ loki:
   # nginx 리버스 프록시. 클러스터 내부에서만 push/query 하므로 Service 직결로 충분.
   gateway:
     enabled: false
+
+  # ── Loki 자체 관측 ───────────────────────────────────────────────────
+  # 로그를 모으는 Loki 가 죽으면 로그로는 알 수 없다 → 메트릭은 Prometheus 가 본다.
+  monitoring:
+    # 차트가 번들한 대시보드/알림룰은 분산 모드 기준이라 SingleBinary 에선 대부분 No data.
+    # 대시보드는 kube-prometheus-stack 쪽 dashboards/ 에서 관리한다.
+    dashboards:
+      enabled: false
+    rules:
+      enabled: false
+    serviceMonitor:
+      enabled: true
+      # kps 가 selector 로 잡을 수 있게 release 라벨을 붙인다.
+      # 다만 개인 repo kps 는 serviceMonitorSelectorNilUsesHelmValues: false 라
+      # Prometheus 가 라벨 무관하게 전체를 잡는다 → 이 라벨은 사실상 보험.
+      labels:
+        release: kube-prometheus-stack
